@@ -70,6 +70,21 @@ Frontend poběží na `http://localhost:5173`.
 - Každý krok scoringu se zapisuje do `ProcessingLog` včetně detailů (`targetRole`, `personId`, `contactId`, `score`, `category`, `reasons`).
 
 
+## Testovací data (`/test-data`)
+
+Složka `test-data/` obsahuje pouze textové CSV soubory:
+
+- `sample-icos.csv` – validní testovací dávka.
+- `sample-icos-invalid.csv` – nevalidní vstupy pro validaci.
+- `sample-icos-duplicates.csv` – duplicity IČO v rámci jednoho importu.
+
+Použití:
+1. V UI založte dávku.
+2. Nahrajte vybraný CSV soubor ze složky `test-data/`.
+3. Ověřte výsledek importu v import logu (validní, nevalidní a duplicitní řádky).
+
+Do repozitáře nepřidávejte binární nebo generované testovací soubory (`.xlsx`, `.xls`, `.zip`, `.db`, `.sqlite`, `.log`) ani runtime složky (`exports/`, `data/`, `storage/`, `crawled/`, `tmp/`).
+
 ## Data & exports policy (Git hygiene)
 
 
