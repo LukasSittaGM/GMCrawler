@@ -54,6 +54,17 @@ Frontend poběží na `http://localhost:5173`.
 - `POST /api/companies/:id/find-website` – dohledání webu jedné firmy
 - `POST /api/search-batches/:id/find-websites` – dohledání webů pro firmy ve stavu `finding_web`
 - `PATCH /api/companies/:id/website` – ruční nastavení webu firmy
+- `POST /api/companies/:id/score-contacts` – vyhodnocení relevance kontaktů pro jednu firmu
+- `POST /api/search-batches/:id/score-contacts` – vyhodnocení relevance kontaktů pro všechny firmy v dávce
+- `GET /api/companies/:id/contact-scores` – vrácení scoring výsledků kontaktů firmy
 - `GET /api/search-batches` – seznam dávek
 - `GET /api/search-batches/:id` – detail dávky (firmy + kandidátní weby + logy)
 - `DELETE /api/search-batches/:id` – smazání dávky
+
+
+## Contact scoring
+
+- Scoring používá `SearchBatch.targetRole` jako cílovou roli.
+- Při opakovaném spuštění se vždy nejdříve smažou předchozí záznamy v `ContactScore` pro firmu a následně se vytvoří nové (bez nekontrolovaných duplicit).
+- Nejlepší kontakt se vybírá podle priority: nejvyšší score, osobní kontakt před obecným, kontakt s e-mailem před samotným telefonem, osoba s pozicí před osobou bez pozice, zdroj z oficiálního webu před jiným zdrojem.
+- Každý krok scoringu se zapisuje do `ProcessingLog` včetně detailů (`targetRole`, `personId`, `contactId`, `score`, `category`, `reasons`).

@@ -1,4 +1,4 @@
-import { ContactScoreCategory, ContactType, Prisma } from '@prisma/client';
+import { ContactScoreCategory, Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
 
 type ReasonItem = {
@@ -8,6 +8,20 @@ type ReasonItem = {
 };
 
 type RoleKey = 'finance' | 'HR' | 'obchod' | 'marketing' | 'IT' | 'management' | 'fleet';
+
+type ScoreCandidate = {
+  companyId: string;
+  personId: string | null;
+  contactId: string | null;
+  targetRole: string;
+  score: number;
+  category: ContactScoreCategory;
+  reasonsJson: Prisma.InputJsonValue;
+  isPersonal: boolean;
+  hasEmail: boolean;
+  hasPosition: boolean;
+  isOfficialSource: boolean;
+};
 
 const ROLE_KEYWORDS: Record<RoleKey, string[]> = {
   finance: [
@@ -130,6 +144,35 @@ function isLikelyStatutoryPerson(fullName: string, statutoryPersonsJson: Prisma.
   });
 }
 
+async function createScoringLog(input: {
+  batchId: string;
+  companyId: string;
+  status: 'info' | 'success' | 'warning' | 'error';
+  message: string;
+  detailJson?: Prisma.InputJsonValue;
+}): Promise<void> {
+  await prisma.processingLog.create({
+    data: {
+      batchId: input.batchId,
+      companyId: input.companyId,
+      step: 'contact_scoring',
+      status: input.status,
+      message: input.message,
+      detailJson: input.detailJson
+    }
+  });
+}
+
+function compareBestCandidates(a: ScoreCandidate, b: ScoreCandidate): number {
+  return (
+    b.score - a.score
+    || Number(b.isPersonal) - Number(a.isPersonal)
+    || Number(b.hasEmail) - Number(a.hasEmail)
+    || Number(b.hasPosition) - Number(a.hasPosition)
+    || Number(b.isOfficialSource) - Number(a.isOfficialSource)
+  );
+}
+
 export async function scoreCompanyContacts(companyId: string): Promise<{ scored: number; bestScore: number | null; bestContactId: string | null; bestPersonId: string | null; targetRole: string | null }> {
   const company = await prisma.company.findUnique({
     where: { id: companyId },
@@ -144,8 +187,31 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     throw new Error('Firma nebyla nalezena');
   }
 
+  await createScoringLog({
+    batchId: company.batchId,
+    companyId: company.id,
+    status: 'info',
+    message: 'Starting contact scoring',
+    detailJson: {
+      targetRole: company.batch.targetRole,
+      contactsCount: company.contacts.length,
+      personsCount: company.persons.length
+    }
+  });
+
   const targetRoleRaw = company.batch.targetRole;
   const normalizedRole = normalizeRole(targetRoleRaw);
+
+  const existingScoresCount = await prisma.contactScore.count({ where: { companyId: company.id } });
+  if (existingScoresCount > 0) {
+    await createScoringLog({
+      batchId: company.batchId,
+      companyId: company.id,
+      status: 'info',
+      message: 'Duplicate scoring detected, replacing previous results',
+      detailJson: { previousScores: existingScoresCount }
+    });
+  }
 
   await prisma.contactScore.deleteMany({ where: { companyId: company.id } });
 
@@ -160,6 +226,53 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
       }
     });
 
+    await createScoringLog({
+      batchId: company.batchId,
+      companyId: company.id,
+      status: 'warning',
+      message: 'Contact scoring failed',
+      detailJson: {
+        targetRole: targetRoleRaw,
+        reason: 'Batch has no targetRole or targetRole is unsupported'
+      }
+    });
+
+    return {
+      scored: 0,
+      bestScore: 0,
+      bestContactId: null,
+      bestPersonId: null,
+      targetRole: targetRoleRaw
+    };
+  }
+
+  if (company.contacts.length === 0) {
+    await prisma.company.update({
+      where: { id: company.id },
+      data: {
+        bestPersonId: null,
+        bestContactId: null,
+        bestContactScore: 0,
+        scoredAt: new Date()
+      }
+    });
+
+    await createScoringLog({
+      batchId: company.batchId,
+      companyId: company.id,
+      status: 'warning',
+      message: 'No contacts available for scoring',
+      detailJson: { targetRole: targetRoleRaw }
+    });
+
+    await createScoringLog({
+      batchId: company.batchId,
+      companyId: company.id,
+      status: 'success',
+      message: 'Contact scoring completed',
+      detailJson: { targetRole: targetRoleRaw, scoredCandidates: 0 }
+    });
+
     return {
       scored: 0,
       bestScore: 0,
@@ -171,6 +284,16 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
 
   const roleKeywords = ROLE_KEYWORDS[normalizedRole];
   const companyDomain = normalizeText(company.websiteDomain);
+  if (!companyDomain) {
+    await createScoringLog({
+      batchId: company.batchId,
+      companyId: company.id,
+      status: 'warning',
+      message: 'Contact scoring warning: missing websiteDomain',
+      detailJson: { targetRole: targetRoleRaw }
+    });
+  }
+
   const personContactMap = new Map<string, { hasPhone: boolean; hasPersonalEmail: boolean }>();
 
   for (const contact of company.contacts) {
@@ -188,15 +311,7 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     personContactMap.set(contact.personId, current);
   }
 
-  const scoresToCreate: Array<{
-    companyId: string;
-    personId: string | null;
-    contactId: string | null;
-    targetRole: string;
-    score: number;
-    category: ContactScoreCategory;
-    reasonsJson: Prisma.InputJsonValue;
-  }> = [];
+  const scoresToCreate: ScoreCandidate[] = [];
 
   for (const contact of company.contacts) {
     const reasons: ReasonItem[] = [];
@@ -218,6 +333,16 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     if (person?.position) {
       reasons.push({ type: 'specific_position', points: 10, message: 'Osoba má konkrétní pracovní pozici.' });
       score += 10;
+    } else if (person) {
+      reasons.push({ type: 'missing_position', points: -10, message: 'Osoba nemá uvedenou pozici.' });
+      score -= 10;
+      await createScoringLog({
+        batchId: company.batchId,
+        companyId: company.id,
+        status: 'warning',
+        message: 'Contact scoring warning: person has no position',
+        detailJson: { targetRole: targetRoleRaw, personId: person.id, contactId: contact.id }
+      });
     }
 
     if (contact.contactType === 'email' && person) {
@@ -248,6 +373,16 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     } else {
       reasons.push({ type: 'non_official_source', points: -15, message: 'Zdroj není oficiální web firmy.' });
       score -= 15;
+
+      if (!contact.sourceUrl || !sourceDomain) {
+        await createScoringLog({
+          batchId: company.batchId,
+          companyId: company.id,
+          status: 'warning',
+          message: 'Contact scoring warning: missing source URL',
+          detailJson: { targetRole: targetRoleRaw, personId: person?.id ?? null, contactId: contact.id }
+        });
+      }
     }
 
     if (contact.contactType === 'email' || contact.contactType === 'general_email') {
@@ -266,6 +401,13 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     if (!person) {
       reasons.push({ type: 'generic_contact', points: -20, message: 'Obecný kontakt bez přiřazené osoby.' });
       score -= 20;
+      await createScoringLog({
+        batchId: company.batchId,
+        companyId: company.id,
+        status: 'warning',
+        message: 'Contact scoring warning: contact has no person',
+        detailJson: { targetRole: targetRoleRaw, personId: null, contactId: contact.id }
+      });
     }
 
     const extractionConfidence = Math.max(contact.confidenceScore, person?.confidenceScore ?? 0);
@@ -288,14 +430,35 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     const needsReview = !hasRoleSignal && normalizedRole !== 'management';
     const category = resolveCategory(finalScore, needsReview);
 
-    scoresToCreate.push({
+    const candidate: ScoreCandidate = {
       companyId: company.id,
       personId: person?.id ?? null,
       contactId: contact.id,
       targetRole: targetRoleRaw,
       score: finalScore,
       category,
-      reasonsJson: reasons as unknown as Prisma.InputJsonValue
+      reasonsJson: reasons as unknown as Prisma.InputJsonValue,
+      isPersonal: Boolean(person),
+      hasEmail: contact.contactType === 'email' || contact.contactType === 'general_email',
+      hasPosition: Boolean(person?.position),
+      isOfficialSource
+    };
+
+    scoresToCreate.push(candidate);
+
+    await createScoringLog({
+      batchId: company.batchId,
+      companyId: company.id,
+      status: 'info',
+      message: 'Contact scored',
+      detailJson: {
+        targetRole: candidate.targetRole,
+        personId: candidate.personId,
+        contactId: candidate.contactId,
+        score: candidate.score,
+        category: candidate.category,
+        reasons
+      }
     });
   }
 
@@ -318,6 +481,9 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     if (person.position) {
       reasons.push({ type: 'specific_position', points: 10, message: 'Osoba má konkrétní pracovní pozici.' });
       score += 10;
+    } else {
+      reasons.push({ type: 'missing_position', points: -10, message: 'Osoba nemá uvedenou pozici.' });
+      score -= 10;
     }
 
     if (person.confidenceScore > 80) {
@@ -332,24 +498,46 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     score -= 20;
 
     const finalScore = clampScore(score);
-    scoresToCreate.push({
+    const candidate: ScoreCandidate = {
       companyId: company.id,
       personId: person.id,
       contactId: null,
       targetRole: targetRoleRaw,
       score: finalScore,
       category: resolveCategory(finalScore, true),
-      reasonsJson: reasons as unknown as Prisma.InputJsonValue
+      reasonsJson: reasons as unknown as Prisma.InputJsonValue,
+      isPersonal: true,
+      hasEmail: false,
+      hasPosition: Boolean(person.position),
+      isOfficialSource: false
+    };
+    scoresToCreate.push(candidate);
+
+    await createScoringLog({
+      batchId: company.batchId,
+      companyId: company.id,
+      status: 'info',
+      message: 'Contact scored',
+      detailJson: {
+        targetRole: candidate.targetRole,
+        personId: candidate.personId,
+        contactId: candidate.contactId,
+        score: candidate.score,
+        category: candidate.category,
+        reasons
+      }
     });
   }
 
   if (scoresToCreate.length > 0) {
-    await prisma.contactScore.createMany({ data: scoresToCreate });
+    await prisma.contactScore.createMany({
+      data: scoresToCreate.map(({ isPersonal, hasEmail, hasPosition, isOfficialSource, ...dbData }) => dbData)
+    });
   }
 
   const bestContactScore = scoresToCreate
     .filter((item) => item.contactId)
-    .sort((a, b) => b.score - a.score)[0] ?? null;
+    .sort(compareBestCandidates)[0] ?? null;
 
   await prisma.company.update({
     where: { id: company.id },
@@ -361,20 +549,34 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     }
   });
 
-  await prisma.processingLog.create({
-    data: {
+  if (bestContactScore) {
+    await createScoringLog({
       batchId: company.batchId,
       companyId: company.id,
-      step: 'contact_scoring',
-      status: bestContactScore ? 'success' : 'warning',
-      message: bestContactScore ? 'Contact scoring completed' : 'Contact scoring found no candidates',
+      status: 'success',
+      message: 'Best contact selected',
       detailJson: {
-        targetRole: targetRoleRaw,
-        scoredCandidates: scoresToCreate.length,
-        bestContactId: bestContactScore?.contactId ?? null,
-        bestPersonId: bestContactScore?.personId ?? null,
-        bestScore: bestContactScore?.score ?? null
+        targetRole: bestContactScore.targetRole,
+        personId: bestContactScore.personId,
+        contactId: bestContactScore.contactId,
+        score: bestContactScore.score,
+        category: bestContactScore.category,
+        reasons: bestContactScore.reasonsJson
       }
+    });
+  }
+
+  await createScoringLog({
+    batchId: company.batchId,
+    companyId: company.id,
+    status: bestContactScore ? 'success' : 'warning',
+    message: 'Contact scoring completed',
+    detailJson: {
+      targetRole: targetRoleRaw,
+      scoredCandidates: scoresToCreate.length,
+      bestContactId: bestContactScore?.contactId ?? null,
+      bestPersonId: bestContactScore?.personId ?? null,
+      bestScore: bestContactScore?.score ?? null
     }
   });
 
@@ -388,6 +590,33 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
 }
 
 export async function scoreContactsForBatch(batchId: string): Promise<{ processed: number; scoredCompanies: number; errorCount: number }> {
+  const batch = await prisma.searchBatch.findUnique({ where: { id: batchId }, select: { id: true, targetRole: true } });
+  if (!batch) {
+    throw new Error('Dávka nebyla nalezena');
+  }
+
+  if (!batch.targetRole) {
+    const companiesForWarning = await prisma.company.findMany({ where: { batchId }, select: { id: true } });
+    for (const company of companiesForWarning) {
+      await createScoringLog({
+        batchId,
+        companyId: company.id,
+        status: 'warning',
+        message: 'Contact scoring failed',
+        detailJson: {
+          targetRole: null,
+          reason: 'Batch has no targetRole'
+        }
+      });
+    }
+
+    return {
+      processed: companiesForWarning.length,
+      scoredCompanies: 0,
+      errorCount: companiesForWarning.length
+    };
+  }
+
   const companies = await prisma.company.findMany({
     where: { batchId },
     orderBy: { createdAt: 'asc' },
@@ -401,8 +630,18 @@ export async function scoreContactsForBatch(batchId: string): Promise<{ processe
     try {
       await scoreCompanyContacts(company.id);
       scoredCompanies += 1;
-    } catch {
+    } catch (error) {
       errorCount += 1;
+      await createScoringLog({
+        batchId,
+        companyId: company.id,
+        status: 'error',
+        message: 'Contact scoring failed',
+        detailJson: {
+          targetRole: batch.targetRole,
+          reason: error instanceof Error ? error.message : String(error)
+        }
+      });
     }
   }
 

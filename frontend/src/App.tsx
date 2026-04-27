@@ -147,6 +147,21 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function scoreCategoryLabel(category: ContactScore['category'] | null | undefined): string {
+  if (!category) {
+    return '—';
+  }
+
+  const labels: Record<ContactScore['category'], string> = {
+    high: 'Vysoké',
+    medium: 'Střední',
+    low: 'Nízké',
+    needs_review: 'Nutná kontrola'
+  };
+
+  return labels[category];
+}
+
 function BatchListPage() {
   const [batches, setBatches] = useState<SearchBatch[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -291,6 +306,9 @@ function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url
   const reviewOptions = ['confirmed', 'rejected', 'manually_edited'];
 
   const bestContact = company.contactScores.find((item) => item.contactId === company.bestContactId) ?? company.contactScores[0];
+  const bestPerson = company.contactScores.find((item) => item.person?.id === company.bestPersonId)?.person
+    ?? bestContact?.person
+    ?? null;
 
   return (
     <details>
@@ -407,8 +425,9 @@ function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url
 
       <h3>Nalezené osoby a kontakty</h3>
       <p><strong>Počet osob:</strong> {company.personsCount ?? 0} | <strong>Počet kontaktů:</strong> {company.contactsCount ?? 0}</p>
-      <p><strong>Nejlepší kontakt:</strong> {bestContact?.contact ? `${bestContact.contact.contactType}: ${bestContact.contact.value}` : '—'}</p>
-      <p><strong>Best score:</strong> {company.bestContactScore ?? '—'} {bestContact ? `(${bestContact.category})` : ''}</p>
+      <p><strong>Nejlepší kontakt:</strong> {bestContact?.contact ? `${bestContact.contact.contactType}: ${bestContact.contact.value}` : '—'} {bestContact ? <span className="recommended-badge">Doporučený kontakt</span> : null}</p>
+      <p><strong>Nejlepší osoba:</strong> {bestPerson ? `${bestPerson.fullName}${bestPerson.position ? ` (${bestPerson.position})` : ''}` : '—'}</p>
+      <p><strong>Best score:</strong> {company.bestContactScore ?? '—'} {bestContact ? `(${scoreCategoryLabel(bestContact.category)})` : ''}</p>
       <p><strong>Scored at:</strong> {company.scoredAt ? new Date(company.scoredAt).toLocaleString('cs-CZ') : '—'}</p>
 
       <h4>Osoby</h4>
@@ -483,32 +502,44 @@ function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url
       <table>
         <thead>
           <tr>
-            <th>Score</th>
-            <th>Kategorie</th>
-            <th>Cílová role</th>
             <th>Osoba</th>
             <th>Kontakt</th>
-            <th>Důvody</th>
+            <th>Role</th>
+            <th>Score</th>
+            <th>Kategorie</th>
+            <th>Důvody scoringu</th>
+            <th>Zdroj URL</th>
           </tr>
         </thead>
         <tbody>
-          {company.contactScores.map((item) => (
-            <tr key={item.id}>
-              <td>{item.score}</td>
-              <td>{item.category}</td>
-              <td>{item.targetRole}</td>
-              <td>{item.person ? `${item.person.fullName}${item.person.position ? ` (${item.person.position})` : ''}` : '—'}</td>
-              <td>{item.contact ? `${item.contact.contactType}: ${item.contact.value}` : '—'}</td>
-              <td>
-                <ul>
-                  {(item.reasonsJson ?? []).map((reason, idx) => (
-                    <li key={`${item.id}-reason-${idx}`}>{reason.points > 0 ? '+' : ''}{reason.points} {reason.message}</li>
-                  ))}
-                </ul>
-              </td>
-            </tr>
-          ))}
-          {company.contactScores.length === 0 && <tr><td colSpan={6}>Scoring zatím nebyl proveden.</td></tr>}
+          {company.contactScores.map((item) => {
+            const sourceUrl = company.contacts.find((contact) => contact.id === item.contactId)?.sourceUrl
+              ?? company.persons.find((person) => person.id === item.person?.id)?.sourceUrl
+              ?? '—';
+            const isRecommended = item.contactId === company.bestContactId;
+
+            return (
+              <tr key={item.id} className={isRecommended ? 'recommended-row' : undefined}>
+                <td>{item.person ? `${item.person.fullName}${item.person.position ? ` (${item.person.position})` : ''}` : '—'}</td>
+                <td>
+                  {item.contact ? `${item.contact.contactType}: ${item.contact.value}` : '—'}
+                  {isRecommended ? <span className="recommended-badge">Doporučený kontakt</span> : null}
+                </td>
+                <td>{item.targetRole}</td>
+                <td>{item.score}</td>
+                <td>{scoreCategoryLabel(item.category)}</td>
+                <td>
+                  <ul>
+                    {(item.reasonsJson ?? []).map((reason, idx) => (
+                      <li key={`${item.id}-reason-${idx}`}>{reason.points > 0 ? '+' : ''}{reason.points} {reason.message}</li>
+                    ))}
+                  </ul>
+                </td>
+                <td>{sourceUrl === '—' ? '—' : <a href={sourceUrl} target="_blank" rel="noreferrer">{sourceUrl}</a>}</td>
+              </tr>
+            );
+          })}
+          {company.contactScores.length === 0 && <tr><td colSpan={7}>Scoring zatím nebyl proveden.</td></tr>}
         </tbody>
       </table>
     </details>
@@ -676,7 +707,7 @@ function BatchDetailPage() {
           <button className="button" onClick={() => void findWebsites()} disabled={loading}>Dohledat weby firem</button>{' '}
           <button className="button" onClick={() => void crawlWebsites()} disabled={loading}>Prohledat weby</button>{' '}
           <button className="button" onClick={() => void extractContacts()} disabled={loading}>Extrahovat kontakty</button>{' '}
-          <button className="button" onClick={() => void scoreContacts()} disabled={loading}>Score kontaktů</button>{' '}
+          <button className="button" onClick={() => void scoreContacts()} disabled={loading}>Vyhodnotit relevanci kontaktů</button>{' '}
           <button className="button" onClick={() => void load()} disabled={loading}>Refresh</button>
         </div>
       </div>
@@ -697,6 +728,10 @@ function BatchDetailPage() {
             <th>Počet osob</th>
             <th>Počet kontaktů</th>
             <th>Nejlepší kontakt</th>
+            <th>Nejlepší osoba</th>
+            <th>Score</th>
+            <th>Kategorie</th>
+            <th>targetRole</th>
             <th>Stav extrakce</th>
             <th>Chyba extrakce</th>
             <th>Akce</th>
@@ -713,7 +748,11 @@ function BatchDetailPage() {
               <td>{company.crawledPagesCount ?? 0}</td>
               <td>{company.personsCount ?? 0}</td>
               <td>{company.contactsCount ?? 0}</td>
-              <td>{company.bestContactId ? `${company.bestContactScore ?? 0} bodů` : '—'}</td>
+              <td>{company.contactScores.find((item) => item.contactId === company.bestContactId)?.contact?.value ?? '—'}</td>
+              <td>{company.contactScores.find((item) => item.person?.id === company.bestPersonId)?.person?.fullName ?? '—'}</td>
+              <td>{company.bestContactScore ?? '—'}</td>
+              <td>{scoreCategoryLabel(company.contactScores.find((item) => item.contactId === company.bestContactId)?.category)}</td>
+              <td>{company.contactScores.find((item) => item.contactId === company.bestContactId)?.targetRole ?? batch.targetRole ?? '—'}</td>
               <td>{company.status}</td>
               <td>{company.extractionErrorMessage ?? company.crawlErrorMessage ?? company.errorMessage ?? '—'}</td>
               <td>
