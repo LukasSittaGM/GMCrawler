@@ -12,6 +12,7 @@ enum SearchBatchStatus {
   ready
   processing
   done
+  done_with_errors
   error
 }
 
@@ -99,6 +100,11 @@ model SearchBatch {
   note           String?
   targetRole     String?
   status         SearchBatchStatus @default(draft)
+  currentStep    String            @default("import")
+  progressPercent Int              @default(0)
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  lastErrorMessage String?
   totalCount     Int               @default(0)
   processedCount Int               @default(0)
   createdAt      DateTime          @default(now())

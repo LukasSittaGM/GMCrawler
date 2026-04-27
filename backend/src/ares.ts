@@ -1,3 +1,4 @@
+import { config } from './config.js';
 const DEFAULT_ARES_API_BASE_URL = 'https://ares.gov.cz/ekonomicke-subjekty-v-be/rest';
 const DEFAULT_ARES_TIMEOUT_MS = 10000;
 
@@ -93,7 +94,7 @@ export class AresService {
   private readonly timeoutMs: number;
 
   constructor() {
-    this.baseUrl = process.env.ARES_API_BASE_URL ?? DEFAULT_ARES_API_BASE_URL;
+    this.baseUrl = config.aresApiUrl ?? DEFAULT_ARES_API_BASE_URL;
     this.timeoutMs = Number(process.env.ARES_TIMEOUT_MS ?? DEFAULT_ARES_TIMEOUT_MS);
   }
 

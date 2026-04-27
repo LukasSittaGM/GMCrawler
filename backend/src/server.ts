@@ -11,14 +11,36 @@ import { crawlCompanyWebsite } from './crawler.js';
 import { extractCompanyContacts, extractContactsForBatch, updateContactReviewStatus, updatePersonReviewStatus } from './extractor.js';
 import { scoreCompanyContacts, scoreContactsForBatch } from './contact-scoring.js';
 import { buildExportRows, buildSummaryRows, generateCsv, generateXlsx } from './export.js';
+import { config } from './config.js';
+import { clearSession, issueSession, requireAuth, verifyAdmin } from './auth.js';
+import { enqueueJob, queueHealth } from './queue.js';
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
 const port = Number(process.env.PORT ?? 3001);
 const aresService = new AresService();
 
-app.use(cors());
+app.use(cors({ origin: config.appBaseUrl, credentials: true }));
 app.use(express.json());
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = ((body: unknown) => {
+    if (res.statusCode >= 400 && body && typeof body === 'object') {
+      const asRecord = body as Record<string, unknown>;
+      if (typeof asRecord.error === 'string') {
+        return originalJson({ error: { code: 'API_ERROR', message: asRecord.error, detail: {} } });
+      }
+    }
+    return originalJson(body);
+  }) as typeof res.json;
+  next();
+});
+app.use(requireAuth);
+
+const loginSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(1)
+});
 
 const createBatchSchema = z.object({
   name: z.string().trim().min(1, 'Název dávky je povinný'),
@@ -180,6 +202,40 @@ async function processCompanyAres(companyId: string): Promise<{ success: boolean
   }
 }
 
+app.post('/api/login', async (req, res) => {
+  const parsed = loginSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid login payload', detail: parsed.error.flatten() } });
+  }
+  if (!verifyAdmin(parsed.data.email, parsed.data.password)) {
+    return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid credentials', detail: {} } });
+  }
+  issueSession(res, parsed.data.email);
+  return res.json({ ok: true, email: parsed.data.email });
+});
+
+app.post('/api/logout', (_req, res) => {
+  clearSession(res);
+  return res.json({ ok: true });
+});
+
+app.get('/api/health', async (_req, res) => {
+  let databaseStatus: 'ok' | 'error' = 'ok';
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+  } catch {
+    databaseStatus = 'error';
+  }
+
+  return res.json({
+    app: 'ok',
+    database: databaseStatus,
+    queue: queueHealth(),
+    searchProvider: config.searchProvider === 'serpapi' && !config.searchApiKey ? 'mock_fallback' : config.searchProvider,
+    timestamp: new Date().toISOString()
+  });
+});
+
 app.post('/api/search-batches', async (req, res) => {
   const parsed = createBatchSchema.safeParse(req.body);
 
@@ -202,6 +258,9 @@ app.post('/api/search-batches/:id/import', upload.single('file'), async (req, re
   try {
     const rows = parseFile(file.originalname, file.mimetype, file.buffer);
     const summary = buildImportSummary(rows);
+    if (summary.uniqueIcos.length > config.maxCompaniesPerBatch) {
+      return res.status(400).json({ error: { code: 'BATCH_LIMIT_EXCEEDED', message: `Max ${config.maxCompaniesPerBatch} companies per batch`, detail: { maxCompaniesPerBatch: config.maxCompaniesPerBatch } } });
+    }
 
     await prisma.$transaction(async (tx) => {
       for (const row of summary.rows) {
@@ -231,7 +290,9 @@ app.post('/api/search-batches/:id/import', upload.single('file'), async (req, re
         where: { id: batchId },
         data: {
           totalCount: { increment: summary.importedCount },
-          status: summary.importedCount > 0 ? 'ready' : 'draft'
+          status: summary.importedCount > 0 ? 'ready' : 'draft',
+          currentStep: 'import',
+          progressPercent: summary.importedCount > 0 ? 5 : 0
         }
       });
     });
@@ -256,62 +317,12 @@ app.post('/api/search-batches/:id/start', async (req, res) => {
     return res.status(404).json({ error: 'Dávka nebyla nalezena' });
   }
 
+  const job = enqueueJob('full_pipeline', { batchId });
   await prisma.searchBatch.update({
     where: { id: batchId },
-    data: {
-      status: 'processing',
-      processedCount: 0
-    }
+    data: { status: 'processing', startedAt: new Date(), currentStep: 'ares' }
   });
-
-  const companies = await prisma.company.findMany({
-    where: {
-      batchId,
-      status: 'pending'
-    },
-    orderBy: { createdAt: 'asc' }
-  });
-
-  let successCount = 0;
-  let errorCount = 0;
-
-  for (const company of companies) {
-    const result = await processCompanyAres(company.id);
-
-    if (result.success) {
-      successCount += 1;
-    } else {
-      errorCount += 1;
-    }
-
-    await prisma.searchBatch.update({
-      where: { id: batchId },
-      data: {
-        processedCount: {
-          increment: 1
-        }
-      }
-    });
-
-    await waitAresDelay();
-  }
-
-  const finalStatus = companies.length > 0 && successCount === 0 && errorCount > 0 ? 'error' : 'done';
-
-  await prisma.searchBatch.update({
-    where: { id: batchId },
-    data: {
-      status: finalStatus
-    }
-  });
-
-  return res.json({
-    batchId,
-    processed: companies.length,
-    successCount,
-    errorCount,
-    status: finalStatus
-  });
+  return res.status(202).json({ batchId, jobId: job.jobId, status: 'queued' });
 });
 
 app.post('/api/companies/:id/reload-ares', async (req, res) => {
@@ -1079,6 +1090,81 @@ app.get('/api/search-batches/:id', async (req, res) => {
   return res.json(batch);
 });
 
+app.get('/api/dashboard', async (_req, res) => {
+  const [batchCount, companyCount, doneCount, errorCount, pendingReview] = await Promise.all([
+    prisma.searchBatch.count(),
+    prisma.company.count(),
+    prisma.company.count({ where: { status: 'done' } }),
+    prisma.company.count({ where: { status: 'error' } }),
+    prisma.company.count({ where: { status: 'done', finalContactId: null, finalPersonId: null } })
+  ]);
+  const latestBatches = await prisma.searchBatch.findMany({ orderBy: { createdAt: 'desc' }, take: 10 });
+  return res.json({ batchCount, companyCount, doneCount, errorCount, pendingReview, latestBatches });
+});
+
+app.get('/api/search-batches/:id/logs', async (req, res) => {
+  const take = Math.min(Number(req.query.limit ?? 100), 100);
+  const logs = await prisma.processingLog.findMany({
+    where: {
+      batchId: req.params.id,
+      companyId: typeof req.query.companyId === 'string' ? req.query.companyId : undefined,
+      step: typeof req.query.step === 'string' ? req.query.step : undefined,
+      status: typeof req.query.status === 'string' ? (req.query.status as 'info' | 'success' | 'warning' | 'error') : undefined
+    },
+    orderBy: { createdAt: 'desc' },
+    take
+  });
+  return res.json(logs);
+});
+
+app.get('/api/companies/:id/logs', async (req, res) => {
+  const logs = await prisma.processingLog.findMany({
+    where: { companyId: req.params.id },
+    orderBy: { createdAt: 'desc' },
+    take: 100
+  });
+  return res.json(logs);
+});
+
+app.post('/api/search-batches/:id/run-full-pipeline', async (req, res) => {
+  const batch = await prisma.searchBatch.findUnique({ where: { id: req.params.id } });
+  if (!batch) {
+    return res.status(404).json({ error: { code: 'BATCH_NOT_FOUND', message: 'Batch not found', detail: {} } });
+  }
+  const { jobId } = enqueueJob('full_pipeline', { batchId: req.params.id });
+  return res.status(202).json({ jobId, batchId: req.params.id, status: 'queued' });
+});
+
+app.post('/api/companies/:id/retry', async (req, res) => {
+  const company = await prisma.company.findUnique({ where: { id: req.params.id } });
+  if (!company) {
+    return res.status(404).json({ error: { code: 'COMPANY_NOT_FOUND', message: 'Company not found', detail: {} } });
+  }
+  await createProcessingLog({ batchId: company.batchId, companyId: company.id, step: 'retry', status: 'warning', message: 'Retry requested for company' });
+  const { jobId } = enqueueJob('retry_company', { companyId: company.id, batchId: company.batchId });
+  return res.status(202).json({ jobId, companyId: company.id, status: 'queued' });
+});
+
+app.post('/api/search-batches/:id/retry-failed', async (req, res) => {
+  const batch = await prisma.searchBatch.findUnique({ where: { id: req.params.id } });
+  if (!batch) {
+    return res.status(404).json({ error: { code: 'BATCH_NOT_FOUND', message: 'Batch not found', detail: {} } });
+  }
+  await createProcessingLog({ batchId: batch.id, step: 'retry', status: 'warning', message: 'Retry failed requested for batch' });
+  const { jobId } = enqueueJob('retry_failed', { batchId: batch.id });
+  return res.status(202).json({ jobId, batchId: batch.id, status: 'queued' });
+});
+
+app.post('/api/search-batches/:id/reset-and-run', async (req, res) => {
+  const batch = await prisma.searchBatch.findUnique({ where: { id: req.params.id } });
+  if (!batch) {
+    return res.status(404).json({ error: { code: 'BATCH_NOT_FOUND', message: 'Batch not found', detail: {} } });
+  }
+  await createProcessingLog({ batchId: batch.id, step: 'retry', status: 'warning', message: 'Reset and run requested for batch' });
+  const { jobId } = enqueueJob('reset_and_run', { batchId: batch.id });
+  return res.status(202).json({ jobId, batchId: batch.id, status: 'queued' });
+});
+
 
 app.get('/api/search-batches/:id/export.csv', async (req, res) => {
   const batchId = req.params.id;
@@ -1222,6 +1308,17 @@ app.delete('/api/search-batches/:id', async (req, res) => {
   } catch {
     return res.status(404).json({ error: 'Dávka nebyla nalezena' });
   }
+});
+
+app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = error instanceof Error ? error.message : 'Unexpected error';
+  return res.status(500).json({
+    error: {
+      code: 'INTERNAL_ERROR',
+      message,
+      detail: {}
+    }
+  });
 });
 
 app.listen(port, () => {

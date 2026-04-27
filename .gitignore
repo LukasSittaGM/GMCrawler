@@ -24,6 +24,7 @@ exports/
 *.csv
 !test-data/**/*.csv
 *.xlsx
+!test-data/sample-icos-duplicates.xlsx
 *.xls
 *.zip
 
