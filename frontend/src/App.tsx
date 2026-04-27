@@ -14,6 +14,20 @@ type SearchBatch = {
   createdAt: string;
 };
 
+type CompanyWebsite = {
+  id: string;
+  url: string;
+  normalizedDomain: string;
+  title: string | null;
+  snippet: string | null;
+  source: string;
+  rank: number | null;
+  confidenceScore: number;
+  isOfficialCandidate: boolean;
+  isSelected: boolean;
+  reason: string | null;
+};
+
 type Company = {
   id: string;
   ico: string;
@@ -28,8 +42,13 @@ type Company = {
   dataBoxId: string | null;
   aresLoadedAt: string | null;
   statutoryPersonsJson: unknown;
+  websiteUrl: string | null;
+  websiteDomain: string | null;
+  websiteConfidenceScore: number | null;
+  websiteFoundAt: string | null;
   status: string;
   errorMessage: string | null;
+  websites: CompanyWebsite[];
 };
 
 type ImportLog = {
@@ -190,12 +209,13 @@ function NewBatchPage() {
   );
 }
 
-function CompanyDetail({ company }: { company: Company }) {
+function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url: string) => Promise<void> }) {
   const statutoryPersons = Array.isArray(company.statutoryPersonsJson) ? company.statutoryPersonsJson : [];
+  const [manualWebsiteUrl, setManualWebsiteUrl] = useState('');
 
   return (
     <details>
-      <summary>Detail ARES</summary>
+      <summary>Detail firmy: {company.companyName ?? company.ico}</summary>
       <ul>
         <li><strong>Právní forma:</strong> {company.legalForm ?? '—'}</li>
         <li><strong>Adresa:</strong> {company.addressText ?? '—'}</li>
@@ -206,6 +226,58 @@ function CompanyDetail({ company }: { company: Company }) {
         <li><strong>ARES načteno:</strong> {company.aresLoadedAt ? new Date(company.aresLoadedAt).toLocaleString('cs-CZ') : '—'}</li>
         <li><strong>Statutární osoby:</strong> {statutoryPersons.length > 0 ? JSON.stringify(statutoryPersons) : '—'}</li>
       </ul>
+
+      <h3>Web firmy</h3>
+      <p><strong>Vybraný web:</strong> {company.websiteUrl ? <a href={company.websiteUrl} target="_blank" rel="noreferrer">{company.websiteUrl}</a> : '—'}</p>
+      <p><strong>Confidence:</strong> {company.websiteConfidenceScore ?? '—'}</p>
+      <div className="manual-pick">
+        <input
+          placeholder="https://www.firma.cz"
+          value={manualWebsiteUrl}
+          onChange={(e) => setManualWebsiteUrl(e.target.value)}
+        />
+        <button
+          className="button"
+          onClick={() => {
+            void onSelect(manualWebsiteUrl);
+            setManualWebsiteUrl('');
+          }}
+        >Nastavit ručně</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Vybrat</th>
+            <th>URL</th>
+            <th>Název výsledku</th>
+            <th>Snippet</th>
+            <th>Zdroj</th>
+            <th>Skóre</th>
+            <th>Důvod skóre</th>
+          </tr>
+        </thead>
+        <tbody>
+          {company.websites.map((website) => (
+            <tr key={website.id}>
+              <td>
+                <button className="button" onClick={() => void onSelect(website.url)}>
+                  {website.isSelected ? 'Vybráno' : 'Vybrat jako web firmy'}
+                </button>
+              </td>
+              <td><a href={website.url} target="_blank" rel="noreferrer">{website.url}</a></td>
+              <td>{website.title ?? '—'}</td>
+              <td>{website.snippet ?? '—'}</td>
+              <td>{website.source}</td>
+              <td>{website.confidenceScore}</td>
+              <td>{website.reason ?? '—'}</td>
+            </tr>
+          ))}
+          {company.websites.length === 0 && (
+            <tr><td colSpan={7}>Žádní kandidáti</td></tr>
+          )}
+        </tbody>
+      </table>
     </details>
   );
 }
@@ -249,6 +321,22 @@ function BatchDetailPage() {
     }
   };
 
+  const findWebsites = async () => {
+    if (!id) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await api(`/search-batches/${id}/find-websites`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Vyhledání webů selhalo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const reloadCompanyAres = async (companyId: string) => {
     setLoading(true);
     try {
@@ -256,6 +344,38 @@ function BatchDetailPage() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Reload ARES selhal');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const findCompanyWebsite = async (companyId: string) => {
+    setLoading(true);
+    try {
+      await api(`/companies/${companyId}/find-website`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Vyhledání webu firmy selhalo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const setManualWebsite = async (companyId: string, websiteUrl: string) => {
+    if (!websiteUrl.trim()) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await api(`/companies/${companyId}/website`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ websiteUrl })
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ruční nastavení webu selhalo');
     } finally {
       setLoading(false);
     }
@@ -276,6 +396,7 @@ function BatchDetailPage() {
         <h1>{batch.name}</h1>
         <div>
           <button className="button" onClick={() => void startProcessing()} disabled={loading}>Spustit zpracování</button>{' '}
+          <button className="button" onClick={() => void findWebsites()} disabled={loading}>Dohledat weby firem</button>{' '}
           <button className="button" onClick={() => void load()} disabled={loading}>Refresh</button>
         </div>
       </div>
@@ -290,8 +411,8 @@ function BatchDetailPage() {
             <th>IČO</th>
             <th>Název firmy</th>
             <th>Adresa</th>
-            <th>Stav subjektu</th>
-            <th>Datová schránka</th>
+            <th>Web firmy</th>
+            <th>Website confidence</th>
             <th>Status zpracování</th>
             <th>Chyba</th>
             <th>Akce</th>
@@ -303,18 +424,25 @@ function BatchDetailPage() {
               <td>{company.ico}</td>
               <td>{company.companyName ?? '—'}</td>
               <td>{company.addressText ?? '—'}</td>
-              <td>{company.registrationStatus ?? '—'}</td>
-              <td>{company.dataBoxId ?? '—'}</td>
+              <td>{company.websiteUrl ? <a href={company.websiteUrl} target="_blank" rel="noreferrer">{company.websiteDomain ?? company.websiteUrl}</a> : '—'}</td>
+              <td>{company.websiteConfidenceScore ?? '—'}</td>
               <td>{company.status}</td>
               <td>{company.errorMessage ?? '—'}</td>
-              <td><button className="button" onClick={() => void reloadCompanyAres(company.id)} disabled={loading}>Reload ARES</button></td>
+              <td>
+                <button className="button" onClick={() => void reloadCompanyAres(company.id)} disabled={loading}>Reload ARES</button>{' '}
+                <button className="button" onClick={() => void findCompanyWebsite(company.id)} disabled={loading}>Najít web</button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
 
       {batch.companies.map((company) => (
-        <CompanyDetail key={`${company.id}-detail`} company={company} />
+        <CompanyDetail
+          key={`${company.id}-detail`}
+          company={company}
+          onSelect={async (url) => setManualWebsite(company.id, url)}
+        />
       ))}
 
       <h2>Processing log</h2>

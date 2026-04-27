@@ -44,6 +44,18 @@ input, textarea {
   width: 100%;
   margin-top: 0.25rem;
   padding: 0.5rem;
+  box-sizing: border-box;
+}
+
+.manual-pick {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.manual-pick input {
+  flex: 1;
+  margin-top: 0;
 }
 
 .button, button {

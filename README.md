@@ -1,6 +1,6 @@
-# GMCrawler – Task 2 (ARES integrace)
+# GMCrawler – Task 3 (ARES + dohledání webu firmy)
 
-Tento repozitář obsahuje aplikaci pro import IČO do dávky (`SearchBatch`) a první krok zpracování: načtení základních údajů firem z ARES.
+Tento repozitář obsahuje aplikaci pro import IČO do dávky (`SearchBatch`), načtení základních údajů firem z ARES a krok automatického dohledání pravděpodobného oficiálního webu.
 
 ## Stack
 
@@ -23,11 +23,17 @@ Backend poběží na `http://localhost:3001`.
 
 ### Konfigurace ARES
 
-Nastavuje se v `backend/.env`:
-
 - `ARES_API_BASE_URL` – base URL veřejného ARES API (default: `https://ares.gov.cz/ekonomicke-subjekty-v-be/rest`)
 - `ARES_TIMEOUT_MS` – timeout pro 1 request v ms (default: `10000`)
 - `ARES_REQUEST_DELAY_MS` – zpoždění mezi requesty při dávkovém zpracování v ms (default: `200`)
+
+### Konfigurace dohledávání webu
+
+- `SEARCH_PROVIDER` – `mock` (default) nebo `serpapi`
+- `SERPAPI_API_KEY` – API klíč pro SerpAPI (pokud chybí, použije se mock provider)
+- `SEARCH_TIMEOUT_MS` – timeout pro 1 search request v ms (default: `15000`)
+- `WEBSITE_SEARCH_MAX_QUERIES` – max počet dotazů na firmu (default: `6`)
+- `WEBSITE_SEARCH_MAX_CANDIDATES` – max počet uložených kandidátů na firmu (default: `20`)
 
 ## 2) Frontend setup
 
@@ -45,28 +51,9 @@ Frontend poběží na `http://localhost:5173`.
 - `POST /api/search-batches/:id/import` – import CSV/XLSX do dávky (multipart, pole `file`)
 - `POST /api/search-batches/:id/start` – spuštění zpracování dávky (ARES lookup pro firmy ve stavu `pending`)
 - `POST /api/companies/:id/reload-ares` – ruční opětovné načtení ARES dat jedné firmy
+- `POST /api/companies/:id/find-website` – dohledání webu jedné firmy
+- `POST /api/search-batches/:id/find-websites` – dohledání webů pro firmy ve stavu `finding_web`
+- `PATCH /api/companies/:id/website` – ruční nastavení webu firmy
 - `GET /api/search-batches` – seznam dávek
-- `GET /api/search-batches/:id` – detail dávky (firmy + import log + processing log)
+- `GET /api/search-batches/:id` – detail dávky (firmy + kandidátní weby + logy)
 - `DELETE /api/search-batches/:id` – smazání dávky
-
-## Stavová logika
-
-### Company.status
-
-- `pending` → `loading_ares` → `finding_web` (úspěch)
-- `pending` / `loading_ares` → `error` (chyba)
-
-### SearchBatch.status
-
-- při startu `processing`
-- po dokončení:
-  - `done` (alespoň jedna firma úspěšná, nebo nebylo co zpracovat),
-  - `error` (pokud všechny zpracovávané firmy skončí chybou).
-
-## Poznámky k importu
-
-- podporované formáty: CSV a XLSX,
-- hledané názvy sloupce: `ico`, `ičo`, `ic`, `ič`, `company_ico`,
-- IČO je normalizováno na 8 číslic (mezery odstraněny, kratší hodnoty doplněny nulami zleva),
-- nevalidní/duplicitní řádky se zaznamenají do `ImportLog`,
-- validní a unikátní IČO se uloží jako `Company`.

@@ -40,6 +40,14 @@ enum ProcessingLogStatus {
   error
 }
 
+enum CompanyWebsiteSource {
+  search
+  ares
+  manual
+  imported
+  other
+}
+
 model SearchBatch {
   id             String            @id @default(cuid())
   name           String
@@ -56,31 +64,58 @@ model SearchBatch {
 }
 
 model Company {
-  id                  String        @id @default(cuid())
-  batchId             String
-  ico                 String
-  companyName         String?
-  legalForm           String?
-  addressText         String?
-  city                String?
-  postalCode          String?
-  country             String?
-  registrationStatus  String?
-  createdDate         DateTime?
-  dataBoxId           String?
-  aresRawJson         Json?
-  aresLoadedAt        DateTime?
-  statutoryPersonsJson Json?
-  status              CompanyStatus @default(pending)
-  errorMessage        String?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  id                    String        @id @default(cuid())
+  batchId               String
+  ico                   String
+  companyName           String?
+  legalForm             String?
+  addressText           String?
+  city                  String?
+  postalCode            String?
+  country               String?
+  registrationStatus    String?
+  createdDate           DateTime?
+  dataBoxId             String?
+  aresRawJson           Json?
+  aresLoadedAt          DateTime?
+  statutoryPersonsJson  Json?
+  websiteUrl            String?
+  websiteDomain         String?
+  websiteConfidenceScore Int?
+  websiteFoundAt        DateTime?
+  status                CompanyStatus @default(pending)
+  errorMessage          String?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
-  batch           SearchBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch           SearchBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
   processingLogs  ProcessingLog[]
+  websites        CompanyWebsite[]
 
   @@unique([batchId, ico])
   @@index([batchId])
+}
+
+model CompanyWebsite {
+  id                  String              @id @default(cuid())
+  companyId           String
+  url                 String
+  normalizedDomain    String
+  title               String?
+  snippet             String?
+  source              CompanyWebsiteSource
+  rank                Int?
+  confidenceScore     Int
+  isOfficialCandidate Boolean             @default(false)
+  isSelected          Boolean             @default(false)
+  reason              String?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, confidenceScore])
+  @@index([companyId, normalizedDomain])
 }
 
 model ImportLog {
