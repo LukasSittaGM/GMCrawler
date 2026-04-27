@@ -22,7 +22,9 @@ logs/
 # exports / generated artifacts
 exports/
 *.csv
+!test-data/**/*.csv
 *.xlsx
+*.xls
 *.zip
 
 # crawling runtime data (must stay outside git)

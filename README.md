@@ -72,6 +72,12 @@ Frontend poběží na `http://localhost:5173`.
 
 ## Data & exports policy (Git hygiene)
 
+
+## Test fixtures
+
+- Text-based fixtures for import testing are stored in `test-data/`.
+- Duplicate ICO sample fixture: `test-data/sample-icos-duplicates.csv` (replaces the previous `.xlsx` variant).
+
 - Do **not** commit runtime crawl data, extracted contacts, exports, logs, or temporary files.
 - Application runtime data belongs in PostgreSQL and/or runtime storage outside the repository.
 - `.gitignore` is configured to exclude generated artifacts (for example `node_modules/`, `exports/`, `data/`, `storage/`, `crawled/`, `tmp/`, logs and common binary export formats).
@@ -80,7 +86,7 @@ Frontend poběží na `http://localhost:5173`.
 
 Repository includes `.githooks/pre-commit` that blocks:
 - staged files larger than 5 MB,
-- common runtime/binary artifacts (for example `.xlsx`, `.csv`, `.zip`, `.db`, `.sqlite`, `.log`, `.pyc`),
+- common runtime/binary artifacts (for example `.xlsx`, `.xls`, `.zip`, `.db`, `.sqlite`, `.log`, `.pyc`),
 - runtime directories like `data/`, `storage/`, `crawled/`, `exports/`, and `node_modules/`.
 
 Enable it locally with:
