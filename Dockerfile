@@ -6,7 +6,7 @@ COPY frontend/package*.json /app/frontend/
 RUN cd backend && npm install && cd /app/frontend && npm install
 
 COPY . /app
-RUN cd backend && npm run build && cd /app/frontend && npm run build
+RUN cd backend && npx prisma generate && npm run build && cd /app/frontend && npm run build
 
 EXPOSE 3001 5173
 CMD ["sh", "-c", "cd backend && npm start"]
