@@ -40,22 +40,41 @@ app.post('/api/search-batches/:id/import', upload.single('file'), async (req, re
   try {
     const rows = parseFile(file.originalname, file.mimetype, file.buffer);
     const summary = buildImportSummary(rows);
+    let importedCount = 0;
+    let skippedCount = 0;
 
     await prisma.$transaction(async (tx) => {
+      const existingCompanies = await tx.company.findMany({
+        where: {
+          batchId,
+          ico: { in: summary.uniqueIcos }
+        },
+        select: { ico: true }
+      });
+
+      const existingIcos = new Set(existingCompanies.map((company) => company.ico));
+      const newIcos = summary.uniqueIcos.filter((ico) => !existingIcos.has(ico));
+
+      importedCount = newIcos.length;
+      skippedCount = summary.uniqueIcos.length - newIcos.length;
+
       for (const row of summary.rows) {
+        const isAlreadyImported =
+          row.status === 'imported' && row.normalizedIco ? existingIcos.has(row.normalizedIco) : false;
+
         await tx.importLog.create({
           data: {
             batchId,
             rowNumber: row.rowNumber,
             rawValue: row.rawValue,
             normalizedIco: row.normalizedIco,
-            status: row.status,
-            message: row.message
+            status: isAlreadyImported ? 'skipped' : row.status,
+            message: isAlreadyImported ? 'IČO už je v dávce' : row.message
           }
         });
       }
 
-      for (const ico of summary.uniqueIcos) {
+      for (const ico of newIcos) {
         await tx.company.create({
           data: {
             batchId,
@@ -68,16 +87,17 @@ app.post('/api/search-batches/:id/import', upload.single('file'), async (req, re
       await tx.searchBatch.update({
         where: { id: batchId },
         data: {
-          totalCount: { increment: summary.importedCount },
-          status: summary.importedCount > 0 ? 'ready' : 'draft'
+          totalCount: { increment: importedCount },
+          ...(importedCount > 0 ? { status: 'ready' } : {})
         }
       });
     });
 
     return res.json({
-      importedCount: summary.importedCount,
+      importedCount,
       invalidCount: summary.invalidCount,
       duplicateCount: summary.duplicateCount,
+      skippedCount,
       errors: summary.errors
     });
   } catch (error) {
