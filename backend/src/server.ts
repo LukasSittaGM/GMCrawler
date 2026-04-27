@@ -903,10 +903,10 @@ app.post('/api/companies/:id/select-final-contact', async (req, res) => {
     : null;
 
   if (parsed.data.contactId && !contact) {
-    return res.status(400).json({ error: 'Kontakt pro finální výběr neexistuje' });
+    return res.status(404).json({ error: 'Kontakt pro finální výběr neexistuje' });
   }
   if (parsed.data.personId && !person) {
-    return res.status(400).json({ error: 'Osoba pro finální výběr neexistuje' });
+    return res.status(404).json({ error: 'Osoba pro finální výběr neexistuje' });
   }
   if (!contact && !person) {
     return res.status(400).json({ error: 'Nelze vybrat finální kontakt bez existence kontaktu/osoby' });
