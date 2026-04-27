@@ -1,0 +1,79 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum SearchBatchStatus {
+  draft
+  ready
+  processing
+  done
+  error
+}
+
+enum CompanyStatus {
+  pending
+  loading_ares
+  finding_web
+  crawling
+  extracting
+  done
+  no_results
+  error
+}
+
+enum ImportLogStatus {
+  imported
+  skipped
+  invalid
+  duplicate
+}
+
+model SearchBatch {
+  id             String            @id @default(cuid())
+  name           String
+  note           String?
+  targetRole     String?
+  status         SearchBatchStatus @default(draft)
+  totalCount     Int               @default(0)
+  processedCount Int               @default(0)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  companies      Company[]
+  importLogs     ImportLog[]
+}
+
+model Company {
+  id          String        @id @default(cuid())
+  batchId     String
+  ico         String
+  companyName String?
+  status      CompanyStatus @default(pending)
+  errorMessage String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  batch SearchBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, ico])
+  @@index([batchId])
+}
+
+model ImportLog {
+  id            String          @id @default(cuid())
+  batchId       String
+  rowNumber     Int
+  rawValue      String
+  normalizedIco String?
+  status        ImportLogStatus
+  message       String?
+  createdAt     DateTime        @default(now())
+
+  batch SearchBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+}
