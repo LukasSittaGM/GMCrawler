@@ -537,6 +537,31 @@ app.post('/api/search-batches/:id/score-contacts', async (req, res) => {
   return res.json({ batchId, ...result });
 });
 
+
+app.get('/api/companies/:id/contact-scores', async (req, res) => {
+  const company = await prisma.company.findUnique({
+    where: { id: req.params.id },
+    select: {
+      id: true,
+      batchId: true,
+      bestPersonId: true,
+      bestContactId: true,
+      bestContactScore: true,
+      scoredAt: true,
+      contactScores: {
+        orderBy: [{ score: 'desc' }, { createdAt: 'desc' }],
+        include: { person: true, contact: true }
+      }
+    }
+  });
+
+  if (!company) {
+    return res.status(404).json({ error: 'Firma nebyla nalezena' });
+  }
+
+  return res.json(company);
+});
+
 app.patch('/api/company-contacts/:id/review-status', async (req, res) => {
   const parsed = reviewStatusSchema.safeParse(req.body);
   if (!parsed.success) {
