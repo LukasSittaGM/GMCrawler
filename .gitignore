@@ -1,0 +1,45 @@
+# dependencies
+node_modules/
+backend/node_modules/
+frontend/node_modules/
+
+# build outputs
+dist/
+build/
+.next/
+frontend/dist/
+backend/dist/
+
+# env files
+.env
+backend/.env
+frontend/.env
+
+# logs
+*.log
+logs/
+
+# exports / generated artifacts
+exports/
+*.csv
+*.xlsx
+*.zip
+
+# crawling runtime data (must stay outside git)
+data/
+storage/
+crawled/
+
+# database dumps and local db files
+*.sqlite
+*.db
+*.dump
+
+# temp / cache
+.tmp/
+tmp/
+.cache/
+
+# python / misc
+*.pyc
+__pycache__/
