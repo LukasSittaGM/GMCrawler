@@ -1,4 +1,4 @@
-import { Link, Route, Routes, useNavigate, useParams } from 'react-router-dom';
+import { Link, Route, Routes, useParams } from 'react-router-dom';
 import { FormEvent, useEffect, useState } from 'react';
 
 const API = 'http://localhost:3001/api';
@@ -18,6 +18,16 @@ type Company = {
   id: string;
   ico: string;
   companyName: string | null;
+  legalForm: string | null;
+  addressText: string | null;
+  city: string | null;
+  postalCode: string | null;
+  country: string | null;
+  registrationStatus: string | null;
+  createdDate: string | null;
+  dataBoxId: string | null;
+  aresLoadedAt: string | null;
+  statutoryPersonsJson: unknown;
   status: string;
   errorMessage: string | null;
 };
@@ -31,9 +41,19 @@ type ImportLog = {
   message: string | null;
 };
 
+type ProcessingLog = {
+  id: string;
+  companyId: string | null;
+  step: string;
+  status: string;
+  message: string;
+  createdAt: string;
+};
+
 type SearchBatchDetail = SearchBatch & {
   companies: Company[];
   importLogs: ImportLog[];
+  processingLogs: ProcessingLog[];
 };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -100,7 +120,6 @@ function BatchListPage() {
 }
 
 function NewBatchPage() {
-  const navigate = useNavigate();
   const [name, setName] = useState('');
   const [targetRole, setTargetRole] = useState('');
   const [note, setNote] = useState('');
@@ -141,7 +160,7 @@ function NewBatchPage() {
         body: form
       });
 
-      navigate(`/batches/${batch.id}`);
+      window.location.href = `/batches/${batch.id}`;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Operace selhala');
     }
@@ -171,20 +190,76 @@ function NewBatchPage() {
   );
 }
 
+function CompanyDetail({ company }: { company: Company }) {
+  const statutoryPersons = Array.isArray(company.statutoryPersonsJson) ? company.statutoryPersonsJson : [];
+
+  return (
+    <details>
+      <summary>Detail ARES</summary>
+      <ul>
+        <li><strong>Právní forma:</strong> {company.legalForm ?? '—'}</li>
+        <li><strong>Adresa:</strong> {company.addressText ?? '—'}</li>
+        <li><strong>Město:</strong> {company.city ?? '—'}</li>
+        <li><strong>PSČ:</strong> {company.postalCode ?? '—'}</li>
+        <li><strong>Země:</strong> {company.country ?? '—'}</li>
+        <li><strong>Datum vzniku:</strong> {company.createdDate ? new Date(company.createdDate).toLocaleDateString('cs-CZ') : '—'}</li>
+        <li><strong>ARES načteno:</strong> {company.aresLoadedAt ? new Date(company.aresLoadedAt).toLocaleString('cs-CZ') : '—'}</li>
+        <li><strong>Statutární osoby:</strong> {statutoryPersons.length > 0 ? JSON.stringify(statutoryPersons) : '—'}</li>
+      </ul>
+    </details>
+  );
+}
+
 function BatchDetailPage() {
   const { id } = useParams();
   const [batch, setBatch] = useState<SearchBatchDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
+  const load = async () => {
     if (!id) {
       return;
     }
 
-    api<SearchBatchDetail>(`/search-batches/${id}`)
-      .then(setBatch)
-      .catch((e) => setError(e instanceof Error ? e.message : 'Nepodařilo se načíst detail dávky'));
+    try {
+      setError(null);
+      setBatch(await api<SearchBatchDetail>(`/search-batches/${id}`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nepodařilo se načíst detail dávky');
+    }
+  };
+
+  useEffect(() => {
+    void load();
   }, [id]);
+
+  const startProcessing = async () => {
+    if (!id) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await api(`/search-batches/${id}/start`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Spuštění dávky selhalo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const reloadCompanyAres = async (companyId: string) => {
+    setLoading(true);
+    try {
+      await api(`/companies/${companyId}/reload-ares`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Reload ARES selhal');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   if (error) {
     return <p className="error">{error}</p>;
@@ -197,10 +272,16 @@ function BatchDetailPage() {
   return (
     <div>
       <Link to="/">← Zpět na dávky</Link>
-      <h1>{batch.name}</h1>
+      <div className="row-between">
+        <h1>{batch.name}</h1>
+        <div>
+          <button className="button" onClick={() => void startProcessing()} disabled={loading}>Spustit zpracování</button>{' '}
+          <button className="button" onClick={() => void load()} disabled={loading}>Refresh</button>
+        </div>
+      </div>
       <p><strong>Role:</strong> {batch.targetRole ?? '—'}</p>
-      <p><strong>Stav:</strong> {batch.status}</p>
-      <p><strong>Počet IČO:</strong> {batch.totalCount}</p>
+      <p><strong>Stav dávky:</strong> {batch.status}</p>
+      <p><strong>Zpracováno:</strong> {batch.processedCount} / {batch.totalCount}</p>
 
       <h2>Firmy</h2>
       <table>
@@ -208,8 +289,12 @@ function BatchDetailPage() {
           <tr>
             <th>IČO</th>
             <th>Název firmy</th>
-            <th>Status</th>
+            <th>Adresa</th>
+            <th>Stav subjektu</th>
+            <th>Datová schránka</th>
+            <th>Status zpracování</th>
             <th>Chyba</th>
+            <th>Akce</th>
           </tr>
         </thead>
         <tbody>
@@ -217,8 +302,40 @@ function BatchDetailPage() {
             <tr key={company.id}>
               <td>{company.ico}</td>
               <td>{company.companyName ?? '—'}</td>
+              <td>{company.addressText ?? '—'}</td>
+              <td>{company.registrationStatus ?? '—'}</td>
+              <td>{company.dataBoxId ?? '—'}</td>
               <td>{company.status}</td>
               <td>{company.errorMessage ?? '—'}</td>
+              <td><button className="button" onClick={() => void reloadCompanyAres(company.id)} disabled={loading}>Reload ARES</button></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {batch.companies.map((company) => (
+        <CompanyDetail key={`${company.id}-detail`} company={company} />
+      ))}
+
+      <h2>Processing log</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Čas</th>
+            <th>Krok</th>
+            <th>Status</th>
+            <th>Firma</th>
+            <th>Zpráva</th>
+          </tr>
+        </thead>
+        <tbody>
+          {batch.processingLogs.map((log) => (
+            <tr key={log.id}>
+              <td>{new Date(log.createdAt).toLocaleString('cs-CZ')}</td>
+              <td>{log.step}</td>
+              <td>{log.status}</td>
+              <td>{log.companyId ?? '—'}</td>
+              <td>{log.message}</td>
             </tr>
           ))}
         </tbody>

@@ -33,6 +33,13 @@ enum ImportLogStatus {
   duplicate
 }
 
+enum ProcessingLogStatus {
+  info
+  success
+  warning
+  error
+}
+
 model SearchBatch {
   id             String            @id @default(cuid())
   name           String
@@ -45,19 +52,32 @@ model SearchBatch {
   updatedAt      DateTime          @updatedAt
   companies      Company[]
   importLogs     ImportLog[]
+  processingLogs ProcessingLog[]
 }
 
 model Company {
-  id          String        @id @default(cuid())
-  batchId     String
-  ico         String
-  companyName String?
-  status      CompanyStatus @default(pending)
-  errorMessage String?
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  id                  String        @id @default(cuid())
+  batchId             String
+  ico                 String
+  companyName         String?
+  legalForm           String?
+  addressText         String?
+  city                String?
+  postalCode          String?
+  country             String?
+  registrationStatus  String?
+  createdDate         DateTime?
+  dataBoxId           String?
+  aresRawJson         Json?
+  aresLoadedAt        DateTime?
+  statutoryPersonsJson Json?
+  status              CompanyStatus @default(pending)
+  errorMessage        String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
 
-  batch SearchBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch           SearchBatch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  processingLogs  ProcessingLog[]
 
   @@unique([batchId, ico])
   @@index([batchId])
@@ -76,4 +96,21 @@ model ImportLog {
   batch SearchBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@index([batchId])
+}
+
+model ProcessingLog {
+  id         String              @id @default(cuid())
+  batchId    String
+  companyId  String?
+  step       String
+  status     ProcessingLogStatus
+  message    String
+  detailJson Json?
+  createdAt  DateTime            @default(now())
+
+  batch   SearchBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  company Company?    @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@index([batchId, createdAt])
+  @@index([companyId, createdAt])
 }
