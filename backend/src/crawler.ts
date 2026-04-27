@@ -213,8 +213,9 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
   let fetchedPages = 0;
   let skippedPages = 0;
   let errorPages = 0;
+  let processedPages = 0;
 
-  while ((priorityQueue.length > 0 || normalQueue.length > 0) && fetchedPages < DEFAULT_MAX_PAGES) {
+  while ((priorityQueue.length > 0 || normalQueue.length > 0) && processedPages < DEFAULT_MAX_PAGES) {
     const item = priorityQueue.shift() ?? normalQueue.shift();
     if (!item) {
       break;
@@ -247,6 +248,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
           detailJson: { url: item.url, depth: item.depth, reason: skipReason }
         }
       });
+      processedPages += 1;
       continue;
     }
 
@@ -277,6 +279,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
           detailJson: { url: item.url, depth: item.depth, reason: 'external-domain' }
         }
       });
+      processedPages += 1;
       continue;
     }
 
@@ -310,6 +313,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
             discoveredFromUrl: item.discoveredFromUrl
           }
         });
+        processedPages += 1;
         continue;
       }
 
@@ -334,6 +338,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
             discoveredFromUrl: item.discoveredFromUrl
           }
         });
+        processedPages += 1;
         continue;
       }
 
@@ -354,6 +359,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
             discoveredFromUrl: item.discoveredFromUrl
           }
         });
+        processedPages += 1;
         continue;
       }
 
@@ -375,6 +381,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
             discoveredFromUrl: item.discoveredFromUrl
           }
         });
+        processedPages += 1;
         continue;
       }
 
@@ -402,6 +409,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
             discoveredFromUrl: item.discoveredFromUrl
           }
         });
+        processedPages += 1;
         continue;
       }
 
@@ -423,6 +431,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
         }
       });
       fetchedPages += 1;
+      processedPages += 1;
 
       let discoveredInternalCount = 0;
       for (const link of internalLinks) {
@@ -495,6 +504,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
           discoveredFromUrl: item.discoveredFromUrl
         }
       });
+      processedPages += 1;
 
       await prisma.processingLog.create({
         data: {
@@ -515,7 +525,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
     }
   }
 
-  if (fetchedPages >= DEFAULT_MAX_PAGES) {
+  if (processedPages >= DEFAULT_MAX_PAGES) {
     await prisma.processingLog.create({
       data: {
         batchId,
@@ -524,6 +534,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
         status: 'warning',
         message: 'Crawl limit reached',
         detailJson: {
+          processedPagesCount: processedPages,
           savedPagesCount: fetchedPages,
           maxPages: DEFAULT_MAX_PAGES
         }
