@@ -548,7 +548,19 @@ app.get('/api/search-batches/:id', async (req, res) => {
         orderBy: { createdAt: 'asc' },
         include: {
           websites: { orderBy: [{ isSelected: 'desc' }, { confidenceScore: 'desc' }] },
-          crawledPages: { orderBy: { createdAt: 'desc' } }
+          crawledPages: {
+            orderBy: { createdAt: 'desc' },
+            select: {
+              id: true,
+              url: true,
+              title: true,
+              httpStatus: true,
+              depth: true,
+              crawlStatus: true,
+              errorMessage: true,
+              createdAt: true
+            }
+          }
         }
       },
       importLogs: { orderBy: { rowNumber: 'asc' } },
@@ -561,6 +573,30 @@ app.get('/api/search-batches/:id', async (req, res) => {
   }
 
   return res.json(batch);
+});
+
+app.get('/api/crawled-pages/:id', async (req, res) => {
+  const crawledPage = await prisma.crawledPage.findUnique({
+    where: { id: req.params.id },
+    select: {
+      id: true,
+      url: true,
+      title: true,
+      textContent: true,
+      htmlContent: true,
+      httpStatus: true,
+      depth: true,
+      crawlStatus: true,
+      errorMessage: true,
+      createdAt: true
+    }
+  });
+
+  if (!crawledPage) {
+    return res.status(404).json({ error: 'Stažená stránka nebyla nalezena' });
+  }
+
+  return res.json(crawledPage);
 });
 
 app.delete('/api/search-batches/:id', async (req, res) => {

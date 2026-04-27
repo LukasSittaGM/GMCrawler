@@ -52,20 +52,23 @@ type Company = {
   status: string;
   errorMessage: string | null;
   websites: CompanyWebsite[];
-  crawledPages: CrawledPage[];
+  crawledPages: CrawledPageSummary[];
 };
 
-type CrawledPage = {
+type CrawledPageSummary = {
   id: string;
   url: string;
   title: string | null;
-  textContent: string | null;
-  htmlContent: string | null;
   httpStatus: number | null;
   depth: number;
   crawlStatus: string;
   errorMessage: string | null;
   createdAt: string;
+};
+
+type CrawledPageDetail = CrawledPageSummary & {
+  textContent: string | null;
+  htmlContent: string | null;
 };
 
 type ImportLog = {
@@ -229,6 +232,22 @@ function NewBatchPage() {
 function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url: string) => Promise<void> }) {
   const statutoryPersons = Array.isArray(company.statutoryPersonsJson) ? company.statutoryPersonsJson : [];
   const [manualWebsiteUrl, setManualWebsiteUrl] = useState('');
+  const [pageDetails, setPageDetails] = useState<Record<string, CrawledPageDetail | undefined>>({});
+  const [loadingPageId, setLoadingPageId] = useState<string | null>(null);
+
+  const loadPageDetail = async (pageId: string) => {
+    if (pageDetails[pageId]) {
+      return;
+    }
+
+    setLoadingPageId(pageId);
+    try {
+      const detail = await api<CrawledPageDetail>(`/crawled-pages/${pageId}`);
+      setPageDetails((previous) => ({ ...previous, [pageId]: detail }));
+    } finally {
+      setLoadingPageId((previous) => (previous === pageId ? null : previous));
+    }
+  };
 
   return (
     <details>
@@ -318,7 +337,7 @@ function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url
               <td>{page.httpStatus ?? '—'}</td>
               <td>{page.depth}</td>
               <td>{page.crawlStatus}</td>
-              <td>{page.textContent?.length ?? 0}</td>
+              <td>—</td>
               <td>{new Date(page.createdAt).toLocaleString('cs-CZ')}</td>
               <td>{page.errorMessage ?? '—'}</td>
             </tr>
@@ -330,15 +349,22 @@ function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url
       </table>
 
       {company.crawledPages.map((page) => (
-        <details key={`${page.id}-detail`}>
+        <details
+          key={`${page.id}-detail`}
+          onToggle={(event) => {
+            if ((event.currentTarget as HTMLDetailsElement).open) {
+              void loadPageDetail(page.id);
+            }
+          }}
+        >
           <summary>Detail stránky: {page.title ?? page.url}</summary>
           <p><strong>URL:</strong> <a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></p>
           <p><strong>Titulek:</strong> {page.title ?? '—'}</p>
           <h4>Čistý text</h4>
-          <pre className="page-content">{page.textContent ?? '—'}</pre>
+          <pre className="page-content">{loadingPageId === page.id ? 'Načítám obsah…' : pageDetails[page.id]?.textContent ?? '—'}</pre>
           <details>
             <summary>Zdrojové HTML</summary>
-            <pre className="page-content">{page.htmlContent ?? '—'}</pre>
+            <pre className="page-content">{loadingPageId === page.id ? 'Načítám obsah…' : pageDetails[page.id]?.htmlContent ?? '—'}</pre>
           </details>
         </details>
       ))}
