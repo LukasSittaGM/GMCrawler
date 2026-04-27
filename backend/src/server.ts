@@ -2,7 +2,7 @@ import cors from 'cors';
 import express from 'express';
 import multer from 'multer';
 import { z } from 'zod';
-import { Prisma } from '@prisma/client';
+import { ContactType, Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { buildImportSummary, parseFile } from './import.js';
 import { AresError, AresService, waitAresDelay } from './ares.js';
@@ -32,6 +32,53 @@ const manualWebsiteSchema = z.object({
 const reviewStatusSchema = z.object({
   reviewStatus: z.enum(['confirmed', 'rejected', 'manually_edited'])
 });
+const contactTypeSchema = z.enum(['email', 'phone', 'general_email', 'general_phone', 'databox', 'other']);
+const editPersonSchema = z.object({
+  fullName: z.string().trim().min(1, 'Jméno je povinné').optional(),
+  position: z.string().trim().nullable().optional(),
+  reviewStatus: z.enum(['confirmed', 'rejected', 'manually_edited']).optional()
+});
+const editContactSchema = z.object({
+  value: z.string().trim().min(1, 'Hodnota kontaktu je povinná').optional(),
+  contactType: contactTypeSchema.optional(),
+  personId: z.string().nullable().optional(),
+  reviewStatus: z.enum(['confirmed', 'rejected', 'manually_edited']).optional()
+});
+const createPersonSchema = z.object({
+  fullName: z.string().trim().optional(),
+  position: z.string().trim().nullable().optional(),
+  contactType: contactTypeSchema.optional(),
+  contactValue: z.string().trim().optional()
+}).refine(
+  (value) => Boolean(value.fullName?.trim() || value.contactValue?.trim()),
+  { message: 'Musí být vyplněno alespoň jméno nebo kontakt' }
+);
+const createContactSchema = z.object({
+  personId: z.string().nullable().optional(),
+  contactType: contactTypeSchema,
+  value: z.string().trim().min(1, 'Hodnota kontaktu je povinná')
+});
+const selectFinalContactSchema = z.object({
+  personId: z.string().nullable().optional(),
+  contactId: z.string().nullable().optional(),
+  finalNote: z.string().trim().nullable().optional()
+}).refine((value) => Boolean(value.personId || value.contactId), {
+  message: 'Musíte zvolit osobu nebo kontakt'
+});
+
+function isValidEmail(value: string): boolean {
+  return /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,}$/i.test(value.trim());
+}
+
+function normalizeContactValue(contactType: ContactType, value: string): string {
+  if (contactType === 'email' || contactType === 'general_email') {
+    return value.trim().toLowerCase();
+  }
+  if (contactType === 'phone' || contactType === 'general_phone') {
+    return value.replace(/\D/g, '');
+  }
+  return value.trim().toLowerCase();
+}
 
 async function createProcessingLog(input: {
   batchId: string;
@@ -589,6 +636,345 @@ app.patch('/api/company-persons/:id/review-status', async (req, res) => {
   } catch {
     return res.status(404).json({ error: 'Osoba nebyla nalezena' });
   }
+});
+
+app.patch('/api/persons/:id', async (req, res) => {
+  const parsed = editPersonSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Nevalidní vstup' });
+  }
+
+  const person = await prisma.companyPerson.findUnique({
+    where: { id: req.params.id },
+    include: { company: true }
+  });
+  if (!person) {
+    return res.status(404).json({ error: 'Osoba nebyla nalezena' });
+  }
+
+  const updated = await prisma.companyPerson.update({
+    where: { id: person.id },
+    data: {
+      fullName: parsed.data.fullName ?? undefined,
+      position: parsed.data.position ?? undefined,
+      reviewStatus: parsed.data.reviewStatus ?? 'manually_edited',
+      manuallyEdited: true
+    }
+  });
+
+  await createProcessingLog({
+    batchId: person.company.batchId,
+    companyId: person.companyId,
+    step: 'manual_review',
+    status: 'success',
+    message: 'Contact edited',
+    detailJson: { entity: 'person', personId: person.id }
+  });
+
+  return res.json(updated);
+});
+
+app.patch('/api/contacts/:id', async (req, res) => {
+  const parsed = editContactSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Nevalidní vstup' });
+  }
+
+  const contact = await prisma.companyContact.findUnique({
+    where: { id: req.params.id },
+    include: { company: true }
+  });
+  if (!contact) {
+    return res.status(404).json({ error: 'Kontakt nebyl nalezen' });
+  }
+
+  const contactType = parsed.data.contactType ?? contact.contactType;
+  const value = parsed.data.value ?? contact.value;
+  if ((contactType === 'email' || contactType === 'general_email') && !isValidEmail(value)) {
+    return res.status(400).json({ error: 'Nevalidní e-mailová adresa' });
+  }
+  const normalizedValue = normalizeContactValue(contactType, value);
+
+  const duplicate = await prisma.companyContact.findFirst({
+    where: {
+      companyId: contact.companyId,
+      id: { not: contact.id },
+      normalizedValue
+    }
+  });
+
+  const updated = await prisma.companyContact.update({
+    where: { id: contact.id },
+    data: {
+      value,
+      contactType,
+      personId: parsed.data.personId ?? undefined,
+      normalizedValue,
+      reviewStatus: parsed.data.reviewStatus ?? 'manually_edited',
+      manuallyEdited: true
+    }
+  });
+
+  await createProcessingLog({
+    batchId: contact.company.batchId,
+    companyId: contact.companyId,
+    step: 'manual_review',
+    status: 'success',
+    message: 'Contact edited',
+    detailJson: { entity: 'contact', contactId: contact.id, duplicateFound: Boolean(duplicate) }
+  });
+
+  return res.json({ contact: updated, warning: duplicate ? 'Podobný kontakt již ve firmě existuje.' : null });
+});
+
+app.post('/api/companies/:id/persons', async (req, res) => {
+  const parsed = createPersonSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Nevalidní vstup' });
+  }
+
+  const company = await prisma.company.findUnique({
+    where: { id: req.params.id },
+    include: { crawledPages: { orderBy: { createdAt: 'asc' }, take: 1 } }
+  });
+  if (!company) {
+    return res.status(404).json({ error: 'Firma nebyla nalezena' });
+  }
+
+  const fallbackPage = company.crawledPages[0];
+  if (!fallbackPage) {
+    return res.status(400).json({ error: 'Firma nemá zdrojovou stránku pro ruční kontakt' });
+  }
+
+  let createdPersonId: string | null = null;
+  let duplicateWarning: string | null = null;
+  const created = await prisma.$transaction(async (tx) => {
+    const person = parsed.data.fullName?.trim()
+      ? await tx.companyPerson.create({
+        data: {
+          companyId: company.id,
+          fullName: parsed.data.fullName.trim(),
+          position: parsed.data.position ?? null,
+          sourceUrl: fallbackPage.url,
+          sourcePageId: fallbackPage.id,
+          contextText: 'Manually created',
+          extractionMethod: 'manual',
+          confidenceScore: 95,
+          reviewStatus: 'manually_edited',
+          manuallyEdited: true
+        }
+      })
+      : null;
+
+    createdPersonId = person?.id ?? null;
+
+    let contact = null;
+    if (parsed.data.contactValue?.trim() && parsed.data.contactType) {
+      const normalizedValue = normalizeContactValue(parsed.data.contactType, parsed.data.contactValue);
+      if ((parsed.data.contactType === 'email' || parsed.data.contactType === 'general_email') && !isValidEmail(parsed.data.contactValue)) {
+        throw new Error('Nevalidní e-mailová adresa');
+      }
+
+      const duplicate = await tx.companyContact.findFirst({
+        where: { companyId: company.id, normalizedValue }
+      });
+      if (duplicate) {
+        duplicateWarning = 'Podobný kontakt již ve firmě existuje.';
+      }
+
+      contact = await tx.companyContact.create({
+        data: {
+          companyId: company.id,
+          personId: person?.id ?? null,
+          contactType: parsed.data.contactType,
+          value: parsed.data.contactValue,
+          normalizedValue,
+          sourceUrl: fallbackPage.url,
+          sourcePageId: fallbackPage.id,
+          contextText: 'Manually created',
+          extractionMethod: 'manual',
+          confidenceScore: 95,
+          reviewStatus: 'manually_edited',
+          manuallyEdited: true
+        }
+      });
+    }
+
+    await tx.company.update({
+      where: { id: company.id },
+      data: {
+        personsCount: await tx.companyPerson.count({ where: { companyId: company.id } }),
+        contactsCount: await tx.companyContact.count({ where: { companyId: company.id } })
+      }
+    });
+
+    return { person, contact };
+  });
+
+  await createProcessingLog({
+    batchId: company.batchId,
+    companyId: company.id,
+    step: 'manual_review',
+    status: 'success',
+    message: 'Manual contact created',
+    detailJson: { personId: createdPersonId, hasContact: Boolean(created.contact) }
+  });
+
+  return res.status(201).json({ ...created, warning: duplicateWarning });
+});
+
+app.post('/api/companies/:id/contacts', async (req, res) => {
+  const parsed = createContactSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Nevalidní vstup' });
+  }
+
+  if ((parsed.data.contactType === 'email' || parsed.data.contactType === 'general_email') && !isValidEmail(parsed.data.value)) {
+    return res.status(400).json({ error: 'Nevalidní e-mailová adresa' });
+  }
+
+  const company = await prisma.company.findUnique({
+    where: { id: req.params.id },
+    include: { crawledPages: { orderBy: { createdAt: 'asc' }, take: 1 } }
+  });
+  if (!company) {
+    return res.status(404).json({ error: 'Firma nebyla nalezena' });
+  }
+  const fallbackPage = company.crawledPages[0];
+  if (!fallbackPage) {
+    return res.status(400).json({ error: 'Firma nemá zdrojovou stránku pro ruční kontakt' });
+  }
+
+  const normalizedValue = normalizeContactValue(parsed.data.contactType, parsed.data.value);
+  const duplicate = await prisma.companyContact.findFirst({
+    where: { companyId: company.id, normalizedValue }
+  });
+
+  const created = await prisma.companyContact.create({
+    data: {
+      companyId: company.id,
+      personId: parsed.data.personId ?? null,
+      contactType: parsed.data.contactType,
+      value: parsed.data.value,
+      normalizedValue,
+      sourceUrl: fallbackPage.url,
+      sourcePageId: fallbackPage.id,
+      contextText: 'Manually created',
+      extractionMethod: 'manual',
+      confidenceScore: 95,
+      reviewStatus: 'manually_edited',
+      manuallyEdited: true
+    }
+  });
+
+  await prisma.company.update({
+    where: { id: company.id },
+    data: { contactsCount: await prisma.companyContact.count({ where: { companyId: company.id } }) }
+  });
+
+  await createProcessingLog({
+    batchId: company.batchId,
+    companyId: company.id,
+    step: 'manual_review',
+    status: 'success',
+    message: 'Manual contact created',
+    detailJson: { contactId: created.id }
+  });
+
+  return res.status(201).json({ contact: created, warning: duplicate ? 'Podobný kontakt již ve firmě existuje.' : null });
+});
+
+app.post('/api/companies/:id/select-final-contact', async (req, res) => {
+  const parsed = selectFinalContactSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Nevalidní vstup' });
+  }
+
+  const company = await prisma.company.findUnique({ where: { id: req.params.id } });
+  if (!company) {
+    return res.status(404).json({ error: 'Firma nebyla nalezena' });
+  }
+
+  const contact = parsed.data.contactId
+    ? await prisma.companyContact.findFirst({ where: { id: parsed.data.contactId, companyId: company.id } })
+    : null;
+  const person = parsed.data.personId
+    ? await prisma.companyPerson.findFirst({ where: { id: parsed.data.personId, companyId: company.id } })
+    : null;
+
+  if (parsed.data.contactId && !contact) {
+    return res.status(400).json({ error: 'Kontakt pro finální výběr neexistuje' });
+  }
+  if (parsed.data.personId && !person) {
+    return res.status(400).json({ error: 'Osoba pro finální výběr neexistuje' });
+  }
+  if (!contact && !person) {
+    return res.status(400).json({ error: 'Nelze vybrat finální kontakt bez existence kontaktu/osoby' });
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.companyPerson.updateMany({ where: { companyId: company.id }, data: { isSelected: false } });
+    await tx.companyContact.updateMany({ where: { companyId: company.id }, data: { isSelected: false } });
+
+    if (person) {
+      await tx.companyPerson.update({ where: { id: person.id }, data: { isSelected: true } });
+    }
+    if (contact) {
+      await tx.companyContact.update({ where: { id: contact.id }, data: { isSelected: true } });
+    }
+
+    await tx.company.update({
+      where: { id: company.id },
+      data: {
+        finalPersonId: person?.id ?? contact?.personId ?? null,
+        finalContactId: contact?.id ?? null,
+        finalDecisionSource: 'manual',
+        finalNote: parsed.data.finalNote ?? null
+      }
+    });
+  });
+
+  await createProcessingLog({
+    batchId: company.batchId,
+    companyId: company.id,
+    step: 'manual_review',
+    status: 'success',
+    message: 'Final contact selected',
+    detailJson: { finalPersonId: person?.id ?? contact?.personId ?? null, finalContactId: contact?.id ?? null }
+  });
+
+  return res.json({ success: true });
+});
+
+app.post('/api/contacts/:id/review', async (req, res) => {
+  const parsed = reviewStatusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Nevalidní vstup' });
+  }
+
+  const contact = await prisma.companyContact.findUnique({
+    where: { id: req.params.id },
+    include: { company: true }
+  });
+  if (!contact) {
+    return res.status(404).json({ error: 'Kontakt nebyl nalezen' });
+  }
+
+  const updated = await prisma.companyContact.update({
+    where: { id: contact.id },
+    data: { reviewStatus: parsed.data.reviewStatus }
+  });
+
+  await createProcessingLog({
+    batchId: contact.company.batchId,
+    companyId: contact.companyId,
+    step: 'manual_review',
+    status: 'success',
+    message: parsed.data.reviewStatus === 'confirmed' ? 'Contact manually confirmed' : parsed.data.reviewStatus === 'rejected' ? 'Contact rejected' : 'Contact edited',
+    detailJson: { contactId: contact.id, reviewStatus: parsed.data.reviewStatus }
+  });
+
+  return res.json(updated);
 });
 
 app.patch('/api/companies/:id/website', async (req, res) => {

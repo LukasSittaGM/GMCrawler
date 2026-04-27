@@ -56,6 +56,10 @@ type Company = {
   bestPersonId: string | null;
   bestContactId: string | null;
   bestContactScore: number | null;
+  finalPersonId: string | null;
+  finalContactId: string | null;
+  finalDecisionSource: 'auto' | 'manual' | null;
+  finalNote: string | null;
   scoredAt: string | null;
   status: string;
   errorMessage: string | null;
@@ -74,6 +78,8 @@ type CompanyPerson = {
   sourceUrl: string;
   contextText: string;
   reviewStatus: string;
+  isSelected: boolean;
+  manuallyEdited: boolean;
 };
 type CompanyContact = {
   id: string;
@@ -83,6 +89,8 @@ type CompanyContact = {
   sourceUrl: string;
   contextText: string;
   reviewStatus: string;
+  isSelected: boolean;
+  manuallyEdited: boolean;
   person: Pick<CompanyPerson, 'id' | 'fullName'> | null;
 };
 type ContactScore = {
@@ -282,266 +290,256 @@ function NewBatchPage() {
   );
 }
 
-function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url: string) => Promise<void> }) {
-  const statutoryPersons = Array.isArray(company.statutoryPersonsJson) ? company.statutoryPersonsJson : [];
+function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onSelect: (url: string) => Promise<void>; onChanged: () => Promise<void> }) {
   const [manualWebsiteUrl, setManualWebsiteUrl] = useState('');
+  const [newPersonName, setNewPersonName] = useState('');
+  const [newPersonPosition, setNewPersonPosition] = useState('');
+  const [newPersonContactType, setNewPersonContactType] = useState<'email' | 'phone'>('email');
+  const [newPersonContactValue, setNewPersonContactValue] = useState('');
+  const [newContactType, setNewContactType] = useState<'email' | 'phone' | 'general_email' | 'general_phone'>('email');
+  const [newContactValue, setNewContactValue] = useState('');
+  const [newContactPersonId, setNewContactPersonId] = useState<string>('');
+  const [editPersonId, setEditPersonId] = useState<string | null>(null);
+  const [editPersonName, setEditPersonName] = useState('');
+  const [editPersonPosition, setEditPersonPosition] = useState('');
+  const [editContactId, setEditContactId] = useState<string | null>(null);
+  const [editContactValue, setEditContactValue] = useState('');
+  const [editContactType, setEditContactType] = useState<'email' | 'phone' | 'general_email' | 'general_phone' | 'other'>('email');
+  const [localError, setLocalError] = useState<string | null>(null);
 
-  const updatePersonReview = async (personId: string, reviewStatus: string) => {
-    await api(`/company-persons/${personId}/review-status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reviewStatus })
-    });
-    window.location.reload();
-  };
-  const updateContactReview = async (contactId: string, reviewStatus: string) => {
-    await api(`/company-contacts/${contactId}/review-status`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reviewStatus })
-    });
-    window.location.reload();
+  const reviewContact = async (contactId: string, reviewStatus: 'confirmed' | 'rejected' | 'manually_edited') => {
+    setLocalError(null);
+    try {
+      await api(`/contacts/${contactId}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewStatus })
+      });
+      await onChanged();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : 'Uložení review statusu selhalo');
+    }
   };
 
-  const reviewOptions = ['confirmed', 'rejected', 'manually_edited'];
+  const reviewPerson = async (personId: string, reviewStatus: 'confirmed' | 'rejected' | 'manually_edited') => {
+    setLocalError(null);
+    try {
+      await api(`/company-persons/${personId}/review-status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reviewStatus })
+      });
+      await onChanged();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : 'Uložení review statusu osoby selhalo');
+    }
+  };
+
+  const savePersonEdit = async () => {
+    if (!editPersonId) return;
+    setLocalError(null);
+    try {
+      await api(`/persons/${editPersonId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fullName: editPersonName, position: editPersonPosition || null })
+      });
+      setEditPersonId(null);
+      await onChanged();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : 'Editace osoby selhala');
+    }
+  };
+
+  const saveContactEdit = async () => {
+    if (!editContactId) return;
+    setLocalError(null);
+    try {
+      const result = await api<{ warning?: string }>(`/contacts/${editContactId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ value: editContactValue, contactType: editContactType })
+      });
+      if (result.warning) {
+        setLocalError(result.warning);
+      }
+      setEditContactId(null);
+      await onChanged();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : 'Editace kontaktu selhala');
+    }
+  };
+
+  const addManualPerson = async () => {
+    setLocalError(null);
+    try {
+      const result = await api<{ warning?: string }>(`/companies/${company.id}/persons`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: newPersonName || undefined,
+          position: newPersonPosition || null,
+          contactType: newPersonContactValue ? newPersonContactType : undefined,
+          contactValue: newPersonContactValue || undefined
+        })
+      });
+      if (result.warning) {
+        setLocalError(result.warning);
+      }
+      setNewPersonName('');
+      setNewPersonPosition('');
+      setNewPersonContactValue('');
+      await onChanged();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : 'Vytvoření osoby selhalo');
+    }
+  };
+
+  const addManualContact = async () => {
+    setLocalError(null);
+    try {
+      const result = await api<{ warning?: string }>(`/companies/${company.id}/contacts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personId: newContactPersonId || null,
+          contactType: newContactType,
+          value: newContactValue
+        })
+      });
+      if (result.warning) {
+        setLocalError(result.warning);
+      }
+      setNewContactValue('');
+      await onChanged();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : 'Vytvoření kontaktu selhalo');
+    }
+  };
+
+  const setFinalContact = async (payload: { personId?: string | null; contactId?: string | null }) => {
+    setLocalError(null);
+    try {
+      await api(`/companies/${company.id}/select-final-contact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      await onChanged();
+    } catch (e) {
+      setLocalError(e instanceof Error ? e.message : 'Nastavení finálního kontaktu selhalo');
+    }
+  };
 
   const bestContact = company.contactScores.find((item) => item.contactId === company.bestContactId) ?? company.contactScores[0];
   const bestPerson = company.contactScores.find((item) => item.person?.id === company.bestPersonId)?.person
     ?? bestContact?.person
     ?? null;
+  const finalContact = company.contacts.find((item) => item.id === company.finalContactId) ?? null;
+  const finalPerson = company.persons.find((item) => item.id === company.finalPersonId)
+    ?? (finalContact?.person ? company.persons.find((item) => item.id === finalContact.person?.id) ?? null : null);
 
   return (
     <details>
       <summary>Detail firmy: {company.companyName ?? company.ico}</summary>
+      {localError && <p className="error">{localError}</p>}
       <ul>
         <li><strong>Právní forma:</strong> {company.legalForm ?? '—'}</li>
         <li><strong>Adresa:</strong> {company.addressText ?? '—'}</li>
-        <li><strong>Město:</strong> {company.city ?? '—'}</li>
-        <li><strong>PSČ:</strong> {company.postalCode ?? '—'}</li>
-        <li><strong>Země:</strong> {company.country ?? '—'}</li>
-        <li><strong>Datum vzniku:</strong> {company.createdDate ? new Date(company.createdDate).toLocaleDateString('cs-CZ') : '—'}</li>
-        <li><strong>ARES načteno:</strong> {company.aresLoadedAt ? new Date(company.aresLoadedAt).toLocaleString('cs-CZ') : '—'}</li>
-        <li><strong>Statutární osoby:</strong> {statutoryPersons.length > 0 ? JSON.stringify(statutoryPersons) : '—'}</li>
       </ul>
+
+      <h3>Finální kontakt</h3>
+      <div className="final-contact-block">
+        <p><strong>Osoba:</strong> {finalPerson?.fullName ?? bestPerson?.fullName ?? '—'}</p>
+        <p><strong>Kontakt:</strong> {finalContact ? `${finalContact.contactType}: ${finalContact.value}` : (bestContact?.contact ? `${bestContact.contact.contactType}: ${bestContact.contact.value}` : '—')}</p>
+        <p><strong>Zdroj rozhodnutí:</strong> <span className={company.finalDecisionSource === 'manual' ? 'badge-manual' : 'badge-auto'}>{company.finalDecisionSource ?? 'auto'}</span></p>
+        <p><strong>Poznámka:</strong> {company.finalNote ?? '—'}</p>
+      </div>
 
       <h3>Web firmy</h3>
       <p><strong>Vybraný web:</strong> {company.websiteUrl ? <a href={company.websiteUrl} target="_blank" rel="noreferrer">{company.websiteUrl}</a> : '—'}</p>
-      <p><strong>Confidence:</strong> {company.websiteConfidenceScore ?? '—'}</p>
       <div className="manual-pick">
-        <input
-          placeholder="https://www.firma.cz"
-          value={manualWebsiteUrl}
-          onChange={(e) => setManualWebsiteUrl(e.target.value)}
-        />
-        <button
-          className="button"
-          onClick={() => {
-            void onSelect(manualWebsiteUrl);
-            setManualWebsiteUrl('');
-          }}
-        >Nastavit ručně</button>
+        <input placeholder="https://www.firma.cz" value={manualWebsiteUrl} onChange={(e) => setManualWebsiteUrl(e.target.value)} />
+        <button className="button" onClick={() => { void onSelect(manualWebsiteUrl); setManualWebsiteUrl(''); }}>Nastavit ručně</button>
       </div>
 
-      <table>
-        <thead>
-          <tr>
-            <th>Vybrat</th>
-            <th>URL</th>
-            <th>Název výsledku</th>
-            <th>Snippet</th>
-            <th>Zdroj</th>
-            <th>Skóre</th>
-            <th>Důvod skóre</th>
-          </tr>
-        </thead>
-        <tbody>
-          {company.websites.map((website) => (
-            <tr key={website.id}>
-              <td>
-                <button className="button" onClick={() => void onSelect(website.url)}>
-                  {website.isSelected ? 'Vybráno' : 'Vybrat jako web firmy'}
-                </button>
-              </td>
-              <td><a href={website.url} target="_blank" rel="noreferrer">{website.url}</a></td>
-              <td>{website.title ?? '—'}</td>
-              <td>{website.snippet ?? '—'}</td>
-              <td>{website.source}</td>
-              <td>{website.confidenceScore}</td>
-              <td>{website.reason ?? '—'}</td>
-            </tr>
-          ))}
-          {company.websites.length === 0 && (
-            <tr><td colSpan={7}>Žádní kandidáti</td></tr>
-          )}
-        </tbody>
-      </table>
-
-      <h3>Stažené stránky</h3>
-      <table>
-        <thead>
-          <tr>
-            <th>URL</th>
-            <th>Titulek</th>
-            <th>HTTP status</th>
-            <th>Depth</th>
-            <th>crawlStatus</th>
-            <th>Délka textu</th>
-            <th>Staženo</th>
-            <th>Chyba</th>
-          </tr>
-        </thead>
-        <tbody>
-          {company.crawledPages.map((page) => (
-            <tr key={page.id}>
-              <td><a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></td>
-              <td>{page.title ?? '—'}</td>
-              <td>{page.httpStatus ?? '—'}</td>
-              <td>{page.depth}</td>
-              <td>{page.crawlStatus}</td>
-              <td>{page.textContent?.length ?? 0}</td>
-              <td>{new Date(page.createdAt).toLocaleString('cs-CZ')}</td>
-              <td>{page.errorMessage ?? '—'}</td>
-            </tr>
-          ))}
-          {company.crawledPages.length === 0 && (
-            <tr><td colSpan={8}>Žádné stažené stránky</td></tr>
-          )}
-        </tbody>
-      </table>
-
-      {company.crawledPages.map((page) => (
-        <details key={`${page.id}-detail`}>
-          <summary>Detail stránky: {page.title ?? page.url}</summary>
-          <p><strong>URL:</strong> <a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></p>
-          <p><strong>Titulek:</strong> {page.title ?? '—'}</p>
-          <h4>Čistý text</h4>
-          <pre className="page-content">{page.textContent ?? '—'}</pre>
-          <details>
-            <summary>Zdrojové HTML</summary>
-            <pre className="page-content">{page.htmlContent ?? '—'}</pre>
-          </details>
-        </details>
-      ))}
-
-      <h3>Nalezené osoby a kontakty</h3>
-      <p><strong>Počet osob:</strong> {company.personsCount ?? 0} | <strong>Počet kontaktů:</strong> {company.contactsCount ?? 0}</p>
-      <p><strong>Nejlepší kontakt:</strong> {bestContact?.contact ? `${bestContact.contact.contactType}: ${bestContact.contact.value}` : '—'} {bestContact ? <span className="recommended-badge">Doporučený kontakt</span> : null}</p>
-      <p><strong>Nejlepší osoba:</strong> {bestPerson ? `${bestPerson.fullName}${bestPerson.position ? ` (${bestPerson.position})` : ''}` : '—'}</p>
-      <p><strong>Best score:</strong> {company.bestContactScore ?? '—'} {bestContact ? `(${scoreCategoryLabel(bestContact.category)})` : ''}</p>
-      <p><strong>Scored at:</strong> {company.scoredAt ? new Date(company.scoredAt).toLocaleString('cs-CZ') : '—'}</p>
-
       <h4>Osoby</h4>
-      <table>
-        <thead>
-          <tr>
-            <th>Jméno</th>
-            <th>Pozice</th>
-            <th>Oddělení</th>
-            <th>Confidence</th>
-            <th>Zdroj URL</th>
-            <th>Kontext</th>
-            <th>Review status</th>
+      <table><thead><tr><th>Jméno</th><th>Pozice</th><th>Confidence</th><th>Status</th><th>Akce</th></tr></thead><tbody>
+        {company.persons.map((person) => (
+          <tr key={person.id} className={person.isSelected ? 'selected-row' : undefined}>
+            <td>{person.fullName} {person.manuallyEdited ? <span className="badge-manual">manual</span> : <span className="badge-auto">auto</span>}</td>
+            <td>{person.position ?? '—'}</td>
+            <td>{person.confidenceScore}</td>
+            <td>{person.reviewStatus}</td>
+            <td>
+              <button className="button" onClick={() => void reviewPerson(person.id, 'confirmed')}>Potvrdit</button>{' '}
+              <button className="button" onClick={() => void reviewPerson(person.id, 'rejected')}>Zamítnout</button>{' '}
+              <button className="button" onClick={() => { setEditPersonId(person.id); setEditPersonName(person.fullName); setEditPersonPosition(person.position ?? ''); }}>Upravit</button>{' '}
+              <button className="button" onClick={() => void setFinalContact({ personId: person.id })}>Nastavit jako finální</button>
+            </td>
           </tr>
-        </thead>
-        <tbody>
-          {company.persons.map((person) => (
-            <tr key={person.id}>
-              <td>{person.fullName}</td>
-              <td>{person.position ?? '—'}</td>
-              <td>{person.department ?? '—'}</td>
-              <td>{person.confidenceScore}</td>
-              <td><a href={person.sourceUrl} target="_blank" rel="noreferrer">{person.sourceUrl}</a></td>
-              <td>{person.contextText}</td>
-              <td>
-                <select value={person.reviewStatus} onChange={(e) => void updatePersonReview(person.id, e.target.value)}>
-                  <option value={person.reviewStatus}>{person.reviewStatus}</option>
-                  {reviewOptions.filter((v) => v !== person.reviewStatus).map((status) => <option key={status} value={status}>{status}</option>)}
-                </select>
-              </td>
-            </tr>
-          ))}
-          {company.persons.length === 0 && <tr><td colSpan={7}>Žádné osoby</td></tr>}
-        </tbody>
-      </table>
+        ))}
+      </tbody></table>
+      {editPersonId && (
+        <div className="manual-pick">
+          <input value={editPersonName} onChange={(e) => setEditPersonName(e.target.value)} placeholder="Jméno" />
+          <input value={editPersonPosition} onChange={(e) => setEditPersonPosition(e.target.value)} placeholder="Pozice" />
+          <button className="button" onClick={() => void savePersonEdit()}>Uložit osobu</button>
+        </div>
+      )}
 
       <h4>Kontakty</h4>
-      <table>
-        <thead>
-          <tr>
-            <th>Typ</th>
-            <th>Hodnota</th>
-            <th>Navázaná osoba</th>
-            <th>Confidence</th>
-            <th>Zdroj URL</th>
-            <th>Kontext</th>
-            <th>Review status</th>
+      <table><thead><tr><th>Typ</th><th>Hodnota</th><th>Osoba</th><th>Confidence</th><th>Status</th><th>Akce</th></tr></thead><tbody>
+        {company.contacts.map((contact) => (
+          <tr key={contact.id} className={contact.isSelected ? 'selected-row' : undefined}>
+            <td>{contact.contactType}</td>
+            <td>{contact.value} {contact.manuallyEdited ? <span className="badge-manual">manual</span> : <span className="badge-auto">auto</span>}</td>
+            <td>{contact.person?.fullName ?? '—'}</td>
+            <td className={contact.confidenceScore >= 80 ? 'confidence-high' : 'confidence-low'}>{contact.confidenceScore}</td>
+            <td>{contact.reviewStatus}</td>
+            <td>
+              <button className="button" onClick={() => void reviewContact(contact.id, 'confirmed')}>Potvrdit</button>{' '}
+              <button className="button" onClick={() => void reviewContact(contact.id, 'rejected')}>Zamítnout</button>{' '}
+              <button className="button" onClick={() => { setEditContactId(contact.id); setEditContactValue(contact.value); setEditContactType(contact.contactType as 'email' | 'phone' | 'general_email' | 'general_phone' | 'other'); }}>Upravit</button>{' '}
+              <button className="button" onClick={() => void setFinalContact({ personId: contact.person?.id ?? null, contactId: contact.id })}>Nastavit jako finální</button>
+            </td>
           </tr>
-        </thead>
-        <tbody>
-          {company.contacts.map((contact) => (
-            <tr key={contact.id}>
-              <td>{contact.contactType}</td>
-              <td>{contact.value}</td>
-              <td>{contact.person?.fullName ?? '—'}</td>
-              <td>{contact.confidenceScore}</td>
-              <td><a href={contact.sourceUrl} target="_blank" rel="noreferrer">{contact.sourceUrl}</a></td>
-              <td>{contact.contextText}</td>
-              <td>
-                <select value={contact.reviewStatus} onChange={(e) => void updateContactReview(contact.id, e.target.value)}>
-                  <option value={contact.reviewStatus}>{contact.reviewStatus}</option>
-                  {reviewOptions.filter((v) => v !== contact.reviewStatus).map((status) => <option key={status} value={status}>{status}</option>)}
-                </select>
-              </td>
-            </tr>
-          ))}
-          {company.contacts.length === 0 && <tr><td colSpan={7}>Žádné kontakty</td></tr>}
-        </tbody>
-      </table>
+        ))}
+      </tbody></table>
 
-      <h4>Scoring kontaktů</h4>
-      <table>
-        <thead>
-          <tr>
-            <th>Osoba</th>
-            <th>Kontakt</th>
-            <th>Role</th>
-            <th>Score</th>
-            <th>Kategorie</th>
-            <th>Důvody scoringu</th>
-            <th>Zdroj URL</th>
-          </tr>
-        </thead>
-        <tbody>
-          {company.contactScores.map((item) => {
-            const sourceUrl = company.contacts.find((contact) => contact.id === item.contactId)?.sourceUrl
-              ?? company.persons.find((person) => person.id === item.person?.id)?.sourceUrl
-              ?? '—';
-            const isRecommended = item.contactId === company.bestContactId;
+      {editContactId && (
+        <div className="manual-pick">
+          <select value={editContactType} onChange={(e) => setEditContactType(e.target.value as 'email' | 'phone' | 'general_email' | 'general_phone' | 'other')}>
+            <option value="email">email</option><option value="phone">phone</option><option value="general_email">general_email</option><option value="general_phone">general_phone</option><option value="other">other</option>
+          </select>
+          <input value={editContactValue} onChange={(e) => setEditContactValue(e.target.value)} placeholder="Hodnota" />
+          <button className="button" onClick={() => void saveContactEdit()}>Uložit kontakt</button>
+        </div>
+      )}
 
-            return (
-              <tr key={item.id} className={isRecommended ? 'recommended-row' : undefined}>
-                <td>{item.person ? `${item.person.fullName}${item.person.position ? ` (${item.person.position})` : ''}` : '—'}</td>
-                <td>
-                  {item.contact ? `${item.contact.contactType}: ${item.contact.value}` : '—'}
-                  {isRecommended ? <span className="recommended-badge">Doporučený kontakt</span> : null}
-                </td>
-                <td>{item.targetRole}</td>
-                <td>{item.score}</td>
-                <td>{scoreCategoryLabel(item.category)}</td>
-                <td>
-                  <ul>
-                    {(item.reasonsJson ?? []).map((reason, idx) => (
-                      <li key={`${item.id}-reason-${idx}`}>{reason.points > 0 ? '+' : ''}{reason.points} {reason.message}</li>
-                    ))}
-                  </ul>
-                </td>
-                <td>{sourceUrl === '—' ? '—' : <a href={sourceUrl} target="_blank" rel="noreferrer">{sourceUrl}</a>}</td>
-              </tr>
-            );
-          })}
-          {company.contactScores.length === 0 && <tr><td colSpan={7}>Scoring zatím nebyl proveden.</td></tr>}
-        </tbody>
-      </table>
+      <h4>+ Přidat kontakt / osobu</h4>
+      <div className="manual-grid">
+        <div>
+          <h5>Nová osoba</h5>
+          <input value={newPersonName} onChange={(e) => setNewPersonName(e.target.value)} placeholder="Jméno osoby" />
+          <input value={newPersonPosition} onChange={(e) => setNewPersonPosition(e.target.value)} placeholder="Pozice" />
+          <select value={newPersonContactType} onChange={(e) => setNewPersonContactType(e.target.value as 'email' | 'phone')}><option value="email">email</option><option value="phone">phone</option></select>
+          <input value={newPersonContactValue} onChange={(e) => setNewPersonContactValue(e.target.value)} placeholder="Volitelný kontakt" />
+          <button className="button" onClick={() => void addManualPerson()}>Vytvořit osobu</button>
+        </div>
+        <div>
+          <h5>Nový kontakt</h5>
+          <select value={newContactType} onChange={(e) => setNewContactType(e.target.value as 'email' | 'phone' | 'general_email' | 'general_phone')}>
+            <option value="email">email</option><option value="phone">phone</option><option value="general_email">general_email</option><option value="general_phone">general_phone</option>
+          </select>
+          <input value={newContactValue} onChange={(e) => setNewContactValue(e.target.value)} placeholder="Hodnota kontaktu" />
+          <select value={newContactPersonId} onChange={(e) => setNewContactPersonId(e.target.value)}>
+            <option value="">Bez osoby</option>
+            {company.persons.map((person) => <option key={person.id} value={person.id}>{person.fullName}</option>)}
+          </select>
+          <button className="button" onClick={() => void addManualContact()}>Vytvořit kontakt</button>
+        </div>
+      </div>
     </details>
   );
 }
@@ -804,6 +802,7 @@ function BatchDetailPage() {
           key={`${company.id}-detail`}
           company={company}
           onSelect={async (url) => setManualWebsite(company.id, url)}
+          onChanged={load}
         />
       ))}
 

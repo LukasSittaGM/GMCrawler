@@ -545,6 +545,14 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
       bestPersonId: bestContactScore?.personId ?? null,
       bestContactId: bestContactScore?.contactId ?? null,
       bestContactScore: bestContactScore?.score ?? 0,
+      ...(company.finalDecisionSource === 'manual'
+        ? {}
+        : {
+          finalPersonId: bestContactScore?.personId ?? null,
+          finalContactId: bestContactScore?.contactId ?? null,
+          finalDecisionSource: 'auto',
+          finalNote: null
+        }),
       scoredAt: new Date()
     }
   });

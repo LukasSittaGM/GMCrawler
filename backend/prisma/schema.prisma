@@ -138,6 +138,10 @@ model Company {
   bestPersonId          String?
   bestContactId         String?
   bestContactScore      Int?
+  finalPersonId         String?
+  finalContactId        String?
+  finalDecisionSource   String?
+  finalNote             String?
   scoredAt              DateTime?
   status                CompanyStatus @default(pending)
   errorMessage          String?
@@ -251,6 +255,8 @@ model CompanyPerson {
   extractionMethod ExtractionMethod
   confidenceScore  Int
   reviewStatus     ReviewStatus     @default(unreviewed)
+  isSelected       Boolean          @default(false)
+  manuallyEdited   Boolean          @default(false)
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
@@ -276,6 +282,8 @@ model CompanyContact {
   extractionMethod ExtractionMethod
   confidenceScore  Int
   reviewStatus     ReviewStatus     @default(unreviewed)
+  isSelected       Boolean          @default(false)
+  manuallyEdited   Boolean          @default(false)
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
