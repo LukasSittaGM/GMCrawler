@@ -196,13 +196,22 @@ app.post('/api/search-batches/:id/start', async (req, res) => {
     return res.status(404).json({ error: 'Dávka nebyla nalezena' });
   }
 
-  await prisma.searchBatch.update({
-    where: { id: batchId },
+  const startedBatch = await prisma.searchBatch.updateMany({
+    where: {
+      id: batchId,
+      status: {
+        not: 'processing'
+      }
+    },
     data: {
       status: 'processing',
       processedCount: 0
     }
   });
+
+  if (startedBatch.count === 0) {
+    return res.status(409).json({ error: 'Dávka už se právě zpracovává' });
+  }
 
   const companies = await prisma.company.findMany({
     where: {
