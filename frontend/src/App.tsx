@@ -11,6 +11,11 @@ type SearchBatch = {
   status: string;
   totalCount: number;
   processedCount: number;
+  currentStep?: string;
+  progressPercent?: number;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  lastErrorMessage?: string | null;
   createdAt: string;
 };
 
@@ -142,10 +147,10 @@ type SearchBatchDetail = SearchBatch & {
 };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${url}`, init);
+  const response = await fetch(`${API}${url}`, { credentials: 'include', ...init });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error ?? 'Požadavek selhal');
+    throw new Error(body.error?.message ?? body.error ?? 'Požadavek selhal');
   }
 
   if (response.status === 204) {
@@ -153,6 +158,24 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+function LoginPage({ onLogin }: { onLogin: () => void }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      await api('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      onLogin();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed');
+    }
+  };
+
+  return <div><h1>Přihlášení</h1><form onSubmit={submit} className="form"><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" /><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Heslo" />{error && <p className="error">{error}</p>}<button className="button" type="submit">Přihlásit</button></form></div>;
 }
 
 function scoreCategoryLabel(category: ContactScore['category'] | null | undefined): string {
@@ -172,11 +195,13 @@ function scoreCategoryLabel(category: ContactScore['category'] | null | undefine
 
 function BatchListPage() {
   const [batches, setBatches] = useState<SearchBatch[]>([]);
+  const [dashboard, setDashboard] = useState<{ batchCount: number; companyCount: number; doneCount: number; errorCount: number; pendingReview: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
     try {
       setBatches(await api<SearchBatch[]>('/search-batches'));
+      setDashboard(await api('/dashboard'));
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Nepodařilo se načíst dávky');
     }
@@ -193,6 +218,7 @@ function BatchListPage() {
         <Link to="/batches/new" className="button">Nová dávka</Link>
       </div>
       {error && <p className="error">{error}</p>}
+      {dashboard && <div className="card"><p>Dávek: {dashboard.batchCount} | Firem: {dashboard.companyCount} | Hotovo: {dashboard.doneCount} | Chyby: {dashboard.errorCount} | Čeká na validaci: {dashboard.pendingReview}</p></div>}
       <table>
         <thead>
           <tr>
@@ -574,7 +600,7 @@ function BatchDetailPage() {
 
     setLoading(true);
     try {
-      await api(`/search-batches/${id}/start`, { method: 'POST' });
+      await api(`/search-batches/${id}/run-full-pipeline`, { method: 'POST' });
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Spuštění dávky selhalo');
@@ -583,65 +609,7 @@ function BatchDetailPage() {
     }
   };
 
-  const findWebsites = async () => {
-    if (!id) {
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await api(`/search-batches/${id}/find-websites`, { method: 'POST' });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Vyhledání webů selhalo');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const crawlWebsites = async () => {
-    if (!id) {
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await api(`/search-batches/${id}/crawl`, { method: 'POST' });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Crawling webů selhal');
-    } finally {
-      setLoading(false);
-    }
-  };
-  const extractContacts = async () => {
-    if (!id) {
-      return;
-    }
-    setLoading(true);
-    try {
-      await api(`/search-batches/${id}/extract-contacts`, { method: 'POST' });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Extrakce kontaktů selhala');
-    } finally {
-      setLoading(false);
-    }
-  };
-  const scoreContacts = async () => {
-    if (!id) {
-      return;
-    }
-    setLoading(true);
-    try {
-      await api(`/search-batches/${id}/score-contacts`, { method: 'POST' });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Scoring kontaktů selhal');
-    } finally {
-      setLoading(false);
-    }
-  };
+  const retryFailed = async () => { if (!id) return; setLoading(true); try { await api(`/search-batches/${id}/retry-failed`, { method: 'POST' }); await load(); } catch (e) { setError(e instanceof Error ? e.message : 'Retry failed'); } finally { setLoading(false); } };
 
 
   const downloadExport = async (format: 'csv' | 'xlsx') => {
@@ -651,7 +619,7 @@ function BatchDetailPage() {
 
     setLoading(true);
     try {
-      const response = await fetch(`${API}/search-batches/${id}/export.${format}`);
+      const response = await fetch(`${API}/search-batches/${id}/export.${format}`, { credentials: 'include' });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error ?? 'Export selhal');
@@ -735,10 +703,7 @@ function BatchDetailPage() {
         <h1>{batch.name}</h1>
         <div>
           <button className="button" onClick={() => void startProcessing()} disabled={loading}>Spustit zpracování</button>{' '}
-          <button className="button" onClick={() => void findWebsites()} disabled={loading}>Dohledat weby firem</button>{' '}
-          <button className="button" onClick={() => void crawlWebsites()} disabled={loading}>Prohledat weby</button>{' '}
-          <button className="button" onClick={() => void extractContacts()} disabled={loading}>Extrahovat kontakty</button>{' '}
-          <button className="button" onClick={() => void scoreContacts()} disabled={loading}>Vyhodnotit relevanci kontaktů</button>{' '}
+          <button className="button" onClick={() => void retryFailed()} disabled={loading}>Retry failed</button>{' '}
           <button className="button" onClick={() => void downloadExport('csv')} disabled={loading}>Export CSV</button>{' '}
           <button className="button" onClick={() => void downloadExport('xlsx')} disabled={loading}>Export XLSX</button>{' '}
           <button className="button" onClick={() => void load()} disabled={loading}>Refresh</button>
@@ -746,7 +711,8 @@ function BatchDetailPage() {
       </div>
       <p><strong>Role:</strong> {batch.targetRole ?? '—'}</p>
       <p><strong>Stav dávky:</strong> {batch.status}</p>
-      <p><strong>Zpracováno:</strong> {batch.processedCount} / {batch.totalCount}</p>
+      <p><strong>Aktuální krok:</strong> {batch.currentStep ?? '—'}</p>
+      <p><strong>Zpracováno:</strong> {batch.processedCount} / {batch.totalCount} ({(batch as SearchBatch & { progressPercent?: number }).progressPercent ?? 0}%)</p>
 
       <h2>Firmy</h2>
       <table>
@@ -858,8 +824,20 @@ function BatchDetailPage() {
 }
 
 export function App() {
+  const [authenticated, setAuthenticated] = useState(false);
+  const [checked, setChecked] = useState(false);
+
+  useEffect(() => {
+    api('/search-batches').then(() => setAuthenticated(true)).catch(() => setAuthenticated(false)).finally(() => setChecked(true));
+  }, []);
+
+  if (!checked) return <main className="container"><p>Načítám…</p></main>;
+  if (!authenticated) return <main className="container"><LoginPage onLogin={() => setAuthenticated(true)} /></main>;
+
   return (
     <main className="container">
+      <div className="row-between"><span /></div>
+      <button className="button" onClick={() => { void api('/logout', { method: 'POST' }).finally(() => setAuthenticated(false)); }}>Odhlásit</button>
       <Routes>
         <Route path="/" element={<BatchListPage />} />
         <Route path="/batches/new" element={<NewBatchPage />} />

@@ -1,9 +1,10 @@
 import { prisma } from './prisma.js';
+import { config } from './config.js';
 
-const DEFAULT_MAX_PAGES = Number(process.env.CRAWLER_MAX_PAGES ?? 30);
-const DEFAULT_MAX_DEPTH = Number(process.env.CRAWLER_MAX_DEPTH ?? 2);
-const DEFAULT_TIMEOUT_MS = Number(process.env.CRAWLER_TIMEOUT_MS ?? 15000);
-const DEFAULT_MAX_HTML_BYTES = Number(process.env.CRAWLER_MAX_HTML_BYTES ?? 5 * 1024 * 1024);
+const DEFAULT_MAX_PAGES = config.crawlMaxPagesPerCompany;
+const DEFAULT_MAX_DEPTH = config.crawlMaxDepth;
+const DEFAULT_TIMEOUT_MS = config.crawlTimeoutMs;
+const DEFAULT_MAX_HTML_BYTES = config.crawlMaxHtmlSizeMb * 1024 * 1024;
 
 const PRIORITY_KEYWORDS = [
   'kontakt', 'kontakty', 'contact', 'team', 'tym', 'tým', 'vedeni', 'vedení', 'management',
@@ -379,7 +380,7 @@ export async function crawlCompanyWebsite(companyId: string): Promise<{ fetchedP
       }
 
       const title = extractTitle(htmlContent);
-      const textContent = htmlToText(htmlContent);
+      const textContent = htmlToText(htmlContent).slice(0, config.maxPageTextLength);
       const internalLinks = extractLinks(htmlContent, finalUrl.url);
 
       if (!textContent) {

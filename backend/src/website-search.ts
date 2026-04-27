@@ -1,7 +1,8 @@
 import { prisma } from './prisma.js';
+import { config } from './config.js';
 
-const DEFAULT_SEARCH_TIMEOUT_MS = 15000;
-const DEFAULT_MAX_QUERIES = 6;
+const DEFAULT_SEARCH_TIMEOUT_MS = config.searchTimeoutMs;
+const DEFAULT_MAX_QUERIES = config.maxSearchQueriesPerCompany;
 const DEFAULT_MAX_CANDIDATES = 20;
 
 const DOMAIN_BLOCKLIST = new Set([
@@ -179,11 +180,11 @@ maxQueries = DEFAULT_MAX_QUERIES): string[] {
 }
 
 export function createSearchProvider(): SearchProvider {
-  const provider = (process.env.SEARCH_PROVIDER ?? 'mock').trim().toLowerCase();
-  const timeoutMs = Number(process.env.SEARCH_TIMEOUT_MS ?? DEFAULT_SEARCH_TIMEOUT_MS);
+  const provider = config.searchProvider.trim().toLowerCase();
+  const timeoutMs = config.searchTimeoutMs;
 
-  if (provider === 'serpapi' && process.env.SERPAPI_API_KEY) {
-    return new SerpApiSearchProvider(process.env.SERPAPI_API_KEY, timeoutMs);
+  if (provider === 'serpapi' && config.searchApiKey) {
+    return new SerpApiSearchProvider(config.searchApiKey, timeoutMs);
   }
 
   return new MockSearchProvider();

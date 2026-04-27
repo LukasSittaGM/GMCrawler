@@ -1,0 +1,10 @@
+-- AlterEnum
+ALTER TYPE "SearchBatchStatus" ADD VALUE IF NOT EXISTS 'done_with_errors';
+
+-- AlterTable
+ALTER TABLE "SearchBatch"
+ADD COLUMN IF NOT EXISTS "currentStep" TEXT NOT NULL DEFAULT 'import',
+ADD COLUMN IF NOT EXISTS "progressPercent" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN IF NOT EXISTS "startedAt" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "finishedAt" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "lastErrorMessage" TEXT;

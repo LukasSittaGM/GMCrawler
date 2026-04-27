@@ -1,112 +1,85 @@
-# GMCrawler – Task 3 (ARES + dohledání webu firmy)
+# GMCrawler MVP (Task 9)
 
-Tento repozitář obsahuje aplikaci pro import IČO do dávky (`SearchBatch`), načtení základních údajů firem z ARES a krok automatického dohledání pravděpodobného oficiálního webu.
+## Požadavky
+- Docker + Docker Compose (doporučeno)
+- nebo Node.js 22+, npm, PostgreSQL 16+
 
-## Stack
+## Instalace (lokálně bez Dockeru)
+```bash
+cp .env.example .env
+cd backend && npm install
+cd ../frontend && npm install
+```
 
-- Backend: Node.js + TypeScript + Express + Prisma
-- Frontend: React + TypeScript + Vite
-- DB: PostgreSQL
+## Nastavení `.env`
+Vyplň minimálně:
+- `DATABASE_URL`
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD_HASH` (SHA-256 hash hesla)
+- `SESSION_SECRET`
 
-## 1) Backend setup
+Příklad hashování hesla:
+```bash
+node -e "console.log(require('crypto').createHash('sha256').update('mojeheslo').digest('hex'))"
+```
 
+## Migrace DB
 ```bash
 cd backend
-cp .env.example .env
-npm install
 npx prisma generate
 npx prisma migrate dev
+```
+
+## Spuštění backendu
+```bash
+cd backend
 npm run dev
 ```
 
-Backend poběží na `http://localhost:3001`.
-
-### Konfigurace ARES
-
-- `ARES_API_BASE_URL` – base URL veřejného ARES API (default: `https://ares.gov.cz/ekonomicke-subjekty-v-be/rest`)
-- `ARES_TIMEOUT_MS` – timeout pro 1 request v ms (default: `10000`)
-- `ARES_REQUEST_DELAY_MS` – zpoždění mezi requesty při dávkovém zpracování v ms (default: `200`)
-
-### Konfigurace dohledávání webu
-
-- `SEARCH_PROVIDER` – `mock` (default) nebo `serpapi`
-- `SERPAPI_API_KEY` – API klíč pro SerpAPI (pokud chybí, použije se mock provider)
-- `SEARCH_TIMEOUT_MS` – timeout pro 1 search request v ms (default: `15000`)
-- `WEBSITE_SEARCH_MAX_QUERIES` – max počet dotazů na firmu (default: `6`)
-- `WEBSITE_SEARCH_MAX_CANDIDATES` – max počet uložených kandidátů na firmu (default: `20`)
-
-## 2) Frontend setup
-
+## Spuštění frontendu
 ```bash
 cd frontend
-npm install
 npm run dev
 ```
 
-Frontend poběží na `http://localhost:5173`.
+## Spuštění workeru
+Aktuální MVP používá interní queue worker v backend procesu.
+Samostatná `worker` služba je připravena v `docker-compose.yml` pro budoucí oddělení.
 
-## API endpointy
-
-- `POST /api/search-batches` – vytvoření dávky
-- `POST /api/search-batches/:id/import` – import CSV/XLSX do dávky (multipart, pole `file`)
-- `POST /api/search-batches/:id/start` – spuštění zpracování dávky (ARES lookup pro firmy ve stavu `pending`)
-- `POST /api/companies/:id/reload-ares` – ruční opětovné načtení ARES dat jedné firmy
-- `POST /api/companies/:id/find-website` – dohledání webu jedné firmy
-- `POST /api/search-batches/:id/find-websites` – dohledání webů pro firmy ve stavu `finding_web`
-- `PATCH /api/companies/:id/website` – ruční nastavení webu firmy
-- `POST /api/companies/:id/score-contacts` – vyhodnocení relevance kontaktů pro jednu firmu
-- `POST /api/search-batches/:id/score-contacts` – vyhodnocení relevance kontaktů pro všechny firmy v dávce
-- `GET /api/companies/:id/contact-scores` – vrácení scoring výsledků kontaktů firmy
-- `GET /api/search-batches` – seznam dávek
-- `GET /api/search-batches/:id` – detail dávky (firmy + kandidátní weby + logy)
-- `DELETE /api/search-batches/:id` – smazání dávky
-
-
-## Contact scoring
-
-- Scoring používá `SearchBatch.targetRole` jako cílovou roli.
-- Při opakovaném spuštění se vždy nejdříve smažou předchozí záznamy v `ContactScore` pro firmu a následně se vytvoří nové (bez nekontrolovaných duplicit).
-- Nejlepší kontakt se vybírá podle priority: nejvyšší score, osobní kontakt před obecným, kontakt s e-mailem před samotným telefonem, osoba s pozicí před osobou bez pozice, zdroj z oficiálního webu před jiným zdrojem.
-- Každý krok scoringu se zapisuje do `ProcessingLog` včetně detailů (`targetRole`, `personId`, `contactId`, `score`, `category`, `reasons`).
-
-
-## Testovací data (`/test-data`)
-
-Složka `test-data/` obsahuje pouze textové CSV soubory:
-
-- `sample-icos.csv` – validní testovací dávka.
-- `sample-icos-invalid.csv` – nevalidní vstupy pro validaci.
-- `sample-icos-duplicates.csv` – duplicity IČO v rámci jednoho importu.
-
-Použití:
-1. V UI založte dávku.
-2. Nahrajte vybraný CSV soubor ze složky `test-data/`.
-3. Ověřte výsledek importu v import logu (validní, nevalidní a duplicitní řádky).
-
-Do repozitáře nepřidávejte binární nebo generované testovací soubory (`.xlsx`, `.xls`, `.zip`, `.db`, `.sqlite`, `.log`) ani runtime složky (`exports/`, `data/`, `storage/`, `crawled/`, `tmp/`).
-
-## Data & exports policy (Git hygiene)
-
-
-## Test fixtures
-
-- Text-based fixtures for import testing are stored in `test-data/`.
-- Duplicate ICO sample fixture: `test-data/sample-icos-duplicates.csv` (replaces the previous `.xlsx` variant).
-
-- Do **not** commit runtime crawl data, extracted contacts, exports, logs, or temporary files.
-- Application runtime data belongs in PostgreSQL and/or runtime storage outside the repository.
-- `.gitignore` is configured to exclude generated artifacts (for example `node_modules/`, `exports/`, `data/`, `storage/`, `crawled/`, `tmp/`, logs and common binary export formats).
-
-### Optional local pre-commit protection
-
-Repository includes `.githooks/pre-commit` that blocks:
-- staged files larger than 5 MB,
-- common runtime/binary artifacts (for example `.xlsx`, `.xls`, `.zip`, `.db`, `.sqlite`, `.log`, `.pyc`),
-- runtime directories like `data/`, `storage/`, `crawled/`, `exports/`, and `node_modules/`.
-
-Enable it locally with:
-
+## Spuštění přes Docker Compose
 ```bash
-git config core.hooksPath .githooks
+docker compose up --build
 ```
 
+## Produkční běh (základ)
+- Nastav `NODE_ENV=production`
+- Nastav silný `SESSION_SECRET`
+- Použij produkční `DATABASE_URL`
+- Spusť `docker compose up -d --build`
+
+## Základní workflow
+1. Přihlas se admin účtem (`/api/login`, UI login stránka).
+2. Založ dávku a importuj IČO.
+3. V detailu dávky klikni **Spustit zpracování** (`run-full-pipeline`).
+4. Sleduj progress (`currentStep`, `progressPercent`) a logy.
+5. Použij **Retry failed** / retry endpointy.
+6. Validuj finální kontakt a exportuj CSV/XLSX.
+
+## API novinky (MVP provoz)
+- `POST /api/search-batches/:id/run-full-pipeline`
+- `POST /api/companies/:id/retry`
+- `POST /api/search-batches/:id/retry-failed`
+- `POST /api/search-batches/:id/reset-and-run`
+- `GET /api/dashboard`
+- `GET /api/search-batches/:id/logs`
+- `GET /api/companies/:id/logs`
+- `GET /api/health`
+- `POST /api/login`, `POST /api/logout`
+
+## Testovací data
+Složka `test-data/` obsahuje:
+- `sample-icos.csv`
+- `sample-icos-invalid.csv`
+- `sample-icos-duplicates.xlsx`
+
+Použití je popsané v `test-data/README.md`.
