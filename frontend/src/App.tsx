@@ -49,10 +49,36 @@ type Company = {
   crawledAt: string | null;
   crawledPagesCount: number | null;
   crawlErrorMessage: string | null;
+  extractedAt: string | null;
+  personsCount: number | null;
+  contactsCount: number | null;
+  extractionErrorMessage: string | null;
   status: string;
   errorMessage: string | null;
   websites: CompanyWebsite[];
   crawledPages: CrawledPage[];
+  persons: CompanyPerson[];
+  contacts: CompanyContact[];
+};
+type CompanyPerson = {
+  id: string;
+  fullName: string;
+  position: string | null;
+  department: string | null;
+  confidenceScore: number;
+  sourceUrl: string;
+  contextText: string;
+  reviewStatus: string;
+};
+type CompanyContact = {
+  id: string;
+  contactType: string;
+  value: string;
+  confidenceScore: number;
+  sourceUrl: string;
+  contextText: string;
+  reviewStatus: string;
+  person: Pick<CompanyPerson, 'id' | 'fullName'> | null;
 };
 
 type CrawledPage = {
@@ -230,6 +256,27 @@ function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url
   const statutoryPersons = Array.isArray(company.statutoryPersonsJson) ? company.statutoryPersonsJson : [];
   const [manualWebsiteUrl, setManualWebsiteUrl] = useState('');
 
+  const updatePersonReview = async (personId: string, reviewStatus: string) => {
+    await api(`/company-persons/${personId}/review-status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewStatus })
+    });
+    window.location.reload();
+  };
+  const updateContactReview = async (contactId: string, reviewStatus: string) => {
+    await api(`/company-contacts/${contactId}/review-status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewStatus })
+    });
+    window.location.reload();
+  };
+
+  const reviewOptions = ['confirmed', 'rejected', 'manually_edited'];
+
+  const bestContact = company.contacts[0];
+
   return (
     <details>
       <summary>Detail firmy: {company.companyName ?? company.ico}</summary>
@@ -342,6 +389,78 @@ function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url
           </details>
         </details>
       ))}
+
+      <h3>Nalezené osoby a kontakty</h3>
+      <p><strong>Počet osob:</strong> {company.personsCount ?? 0} | <strong>Počet kontaktů:</strong> {company.contactsCount ?? 0}</p>
+      <p><strong>Nejlepší kontakt:</strong> {bestContact ? `${bestContact.contactType}: ${bestContact.value}` : '—'}</p>
+
+      <h4>Osoby</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Jméno</th>
+            <th>Pozice</th>
+            <th>Oddělení</th>
+            <th>Confidence</th>
+            <th>Zdroj URL</th>
+            <th>Kontext</th>
+            <th>Review status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {company.persons.map((person) => (
+            <tr key={person.id}>
+              <td>{person.fullName}</td>
+              <td>{person.position ?? '—'}</td>
+              <td>{person.department ?? '—'}</td>
+              <td>{person.confidenceScore}</td>
+              <td><a href={person.sourceUrl} target="_blank" rel="noreferrer">{person.sourceUrl}</a></td>
+              <td>{person.contextText}</td>
+              <td>
+                <select value={person.reviewStatus} onChange={(e) => void updatePersonReview(person.id, e.target.value)}>
+                  <option value={person.reviewStatus}>{person.reviewStatus}</option>
+                  {reviewOptions.filter((v) => v !== person.reviewStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                </select>
+              </td>
+            </tr>
+          ))}
+          {company.persons.length === 0 && <tr><td colSpan={7}>Žádné osoby</td></tr>}
+        </tbody>
+      </table>
+
+      <h4>Kontakty</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>Typ</th>
+            <th>Hodnota</th>
+            <th>Navázaná osoba</th>
+            <th>Confidence</th>
+            <th>Zdroj URL</th>
+            <th>Kontext</th>
+            <th>Review status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {company.contacts.map((contact) => (
+            <tr key={contact.id}>
+              <td>{contact.contactType}</td>
+              <td>{contact.value}</td>
+              <td>{contact.person?.fullName ?? '—'}</td>
+              <td>{contact.confidenceScore}</td>
+              <td><a href={contact.sourceUrl} target="_blank" rel="noreferrer">{contact.sourceUrl}</a></td>
+              <td>{contact.contextText}</td>
+              <td>
+                <select value={contact.reviewStatus} onChange={(e) => void updateContactReview(contact.id, e.target.value)}>
+                  <option value={contact.reviewStatus}>{contact.reviewStatus}</option>
+                  {reviewOptions.filter((v) => v !== contact.reviewStatus).map((status) => <option key={status} value={status}>{status}</option>)}
+                </select>
+              </td>
+            </tr>
+          ))}
+          {company.contacts.length === 0 && <tr><td colSpan={7}>Žádné kontakty</td></tr>}
+        </tbody>
+      </table>
     </details>
   );
 }
@@ -416,6 +535,20 @@ function BatchDetailPage() {
       setLoading(false);
     }
   };
+  const extractContacts = async () => {
+    if (!id) {
+      return;
+    }
+    setLoading(true);
+    try {
+      await api(`/search-batches/${id}/extract-contacts`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Extrakce kontaktů selhala');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const reloadCompanyAres = async (companyId: string) => {
     setLoading(true);
@@ -478,6 +611,7 @@ function BatchDetailPage() {
           <button className="button" onClick={() => void startProcessing()} disabled={loading}>Spustit zpracování</button>{' '}
           <button className="button" onClick={() => void findWebsites()} disabled={loading}>Dohledat weby firem</button>{' '}
           <button className="button" onClick={() => void crawlWebsites()} disabled={loading}>Prohledat weby</button>{' '}
+          <button className="button" onClick={() => void extractContacts()} disabled={loading}>Extrahovat kontakty</button>{' '}
           <button className="button" onClick={() => void load()} disabled={loading}>Refresh</button>
         </div>
       </div>
@@ -495,8 +629,11 @@ function BatchDetailPage() {
             <th>Web firmy</th>
             <th>Website confidence</th>
             <th>Počet stažených stránek</th>
-            <th>Stav crawlování</th>
-            <th>Chyba crawlu</th>
+            <th>Počet osob</th>
+            <th>Počet kontaktů</th>
+            <th>Nejlepší kontakt</th>
+            <th>Stav extrakce</th>
+            <th>Chyba extrakce</th>
             <th>Akce</th>
           </tr>
         </thead>
@@ -509,8 +646,11 @@ function BatchDetailPage() {
               <td>{company.websiteUrl ? <a href={company.websiteUrl} target="_blank" rel="noreferrer">{company.websiteDomain ?? company.websiteUrl}</a> : '—'}</td>
               <td>{company.websiteConfidenceScore ?? '—'}</td>
               <td>{company.crawledPagesCount ?? 0}</td>
+              <td>{company.personsCount ?? 0}</td>
+              <td>{company.contactsCount ?? 0}</td>
+              <td>{company.contacts[0] ? `${company.contacts[0].contactType}: ${company.contacts[0].value}` : '—'}</td>
               <td>{company.status}</td>
-              <td>{company.crawlErrorMessage ?? company.errorMessage ?? '—'}</td>
+              <td>{company.extractionErrorMessage ?? company.crawlErrorMessage ?? company.errorMessage ?? '—'}</td>
               <td>
                 <button className="button" onClick={() => void reloadCompanyAres(company.id)} disabled={loading}>Reload ARES</button>{' '}
                 <button className="button" onClick={() => void findCompanyWebsite(company.id)} disabled={loading}>Najít web</button>

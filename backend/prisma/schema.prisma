@@ -62,6 +62,30 @@ enum CrawledPageStatus {
   error
 }
 
+enum ExtractionMethod {
+  regex
+  html_structure
+  llm
+  manual
+  imported
+}
+
+enum ReviewStatus {
+  unreviewed
+  confirmed
+  rejected
+  manually_edited
+}
+
+enum ContactType {
+  email
+  phone
+  general_email
+  general_phone
+  databox
+  other
+}
+
 model SearchBatch {
   id             String            @id @default(cuid())
   name           String
@@ -100,6 +124,10 @@ model Company {
   crawledAt             DateTime?
   crawledPagesCount     Int?          @default(0)
   crawlErrorMessage     String?
+  extractedAt           DateTime?
+  personsCount          Int?          @default(0)
+  contactsCount         Int?          @default(0)
+  extractionErrorMessage String?
   status                CompanyStatus @default(pending)
   errorMessage          String?
   createdAt             DateTime      @default(now())
@@ -109,6 +137,8 @@ model Company {
   processingLogs  ProcessingLog[]
   websites        CompanyWebsite[]
   crawledPages    CrawledPage[]
+  persons         CompanyPerson[]
+  contacts        CompanyContact[]
 
   @@unique([batchId, ico])
   @@index([batchId])
@@ -133,7 +163,9 @@ model CrawledPage {
   createdAt         DateTime          @default(now())
   updatedAt         DateTime          @updatedAt
 
-  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  company  Company         @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  persons  CompanyPerson[]
+  contacts CompanyContact[]
 
   @@index([companyId, createdAt])
   @@index([companyId, normalizedUrl])
@@ -191,4 +223,53 @@ model ProcessingLog {
 
   @@index([batchId, createdAt])
   @@index([companyId, createdAt])
+}
+
+model CompanyPerson {
+  id               String           @id @default(cuid())
+  companyId        String
+  fullName         String
+  firstName        String?
+  lastName         String?
+  position         String?
+  department       String?
+  sourceUrl        String
+  sourcePageId     String
+  contextText      String
+  extractionMethod ExtractionMethod
+  confidenceScore  Int
+  reviewStatus     ReviewStatus     @default(unreviewed)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  page     CrawledPage      @relation(fields: [sourcePageId], references: [id], onDelete: Cascade)
+  contacts CompanyContact[]
+
+  @@index([companyId, createdAt])
+  @@index([companyId, fullName])
+}
+
+model CompanyContact {
+  id               String           @id @default(cuid())
+  companyId        String
+  personId         String?
+  contactType      ContactType
+  value            String
+  normalizedValue  String
+  sourceUrl        String
+  sourcePageId     String
+  contextText      String
+  extractionMethod ExtractionMethod
+  confidenceScore  Int
+  reviewStatus     ReviewStatus     @default(unreviewed)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  person  CompanyPerson? @relation(fields: [personId], references: [id], onDelete: SetNull)
+  page    CrawledPage   @relation(fields: [sourcePageId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, normalizedValue])
+  @@index([companyId, personId])
 }

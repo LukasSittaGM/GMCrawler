@@ -8,6 +8,7 @@ import { buildImportSummary, parseFile } from './import.js';
 import { AresError, AresService, waitAresDelay } from './ares.js';
 import { findWebsiteForCompany, normalizeWebsiteUrl } from './website-search.js';
 import { crawlCompanyWebsite } from './crawler.js';
+import { extractCompanyContacts, extractContactsForBatch, updateContactReviewStatus, updatePersonReviewStatus } from './extractor.js';
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -25,6 +26,9 @@ const createBatchSchema = z.object({
 
 const manualWebsiteSchema = z.object({
   websiteUrl: z.string().trim().min(1, 'websiteUrl je povinné')
+});
+const reviewStatusSchema = z.object({
+  reviewStatus: z.enum(['confirmed', 'rejected', 'manually_edited'])
 });
 
 async function createProcessingLog(input: {
@@ -464,6 +468,76 @@ app.post('/api/search-batches/:id/crawl', async (req, res) => {
   });
 });
 
+app.post('/api/companies/:id/extract-contacts', async (req, res) => {
+  const company = await prisma.company.findUnique({ where: { id: req.params.id } });
+  if (!company) {
+    return res.status(404).json({ error: 'Firma nebyla nalezena' });
+  }
+
+  try {
+    const result = await extractCompanyContacts(company.id);
+    return res.json({ companyId: company.id, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Contact extraction failed';
+    await prisma.company.update({
+      where: { id: company.id },
+      data: {
+        status: 'error',
+        extractionErrorMessage: message,
+        errorMessage: message
+      }
+    });
+    await createProcessingLog({
+      batchId: company.batchId,
+      companyId: company.id,
+      step: 'extract_contacts',
+      status: 'error',
+      message: 'Contact extraction failed',
+      detailJson: { error: message }
+    });
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/search-batches/:id/extract-contacts', async (req, res) => {
+  const batchId = req.params.id;
+  const batch = await prisma.searchBatch.findUnique({ where: { id: batchId } });
+  if (!batch) {
+    return res.status(404).json({ error: 'Dávka nebyla nalezena' });
+  }
+
+  const result = await extractContactsForBatch(batchId);
+  return res.json({ batchId, ...result });
+});
+
+app.patch('/api/company-contacts/:id/review-status', async (req, res) => {
+  const parsed = reviewStatusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Nevalidní vstup' });
+  }
+
+  try {
+    const updated = await updateContactReviewStatus(req.params.id, parsed.data.reviewStatus);
+    return res.json(updated);
+  } catch {
+    return res.status(404).json({ error: 'Kontakt nebyl nalezen' });
+  }
+});
+
+app.patch('/api/company-persons/:id/review-status', async (req, res) => {
+  const parsed = reviewStatusSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Nevalidní vstup' });
+  }
+
+  try {
+    const updated = await updatePersonReviewStatus(req.params.id, parsed.data.reviewStatus);
+    return res.json(updated);
+  } catch {
+    return res.status(404).json({ error: 'Osoba nebyla nalezena' });
+  }
+});
+
 app.patch('/api/companies/:id/website', async (req, res) => {
   const parsed = manualWebsiteSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -548,7 +622,9 @@ app.get('/api/search-batches/:id', async (req, res) => {
         orderBy: { createdAt: 'asc' },
         include: {
           websites: { orderBy: [{ isSelected: 'desc' }, { confidenceScore: 'desc' }] },
-          crawledPages: { orderBy: { createdAt: 'desc' } }
+          crawledPages: { orderBy: { createdAt: 'desc' } },
+          persons: { orderBy: [{ confidenceScore: 'desc' }, { createdAt: 'desc' }] },
+          contacts: { orderBy: [{ confidenceScore: 'desc' }, { createdAt: 'desc' }], include: { person: true } }
         }
       },
       importLogs: { orderBy: { rowNumber: 'asc' } },
