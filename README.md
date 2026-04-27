@@ -68,3 +68,24 @@ Frontend poběží na `http://localhost:5173`.
 - Při opakovaném spuštění se vždy nejdříve smažou předchozí záznamy v `ContactScore` pro firmu a následně se vytvoří nové (bez nekontrolovaných duplicit).
 - Nejlepší kontakt se vybírá podle priority: nejvyšší score, osobní kontakt před obecným, kontakt s e-mailem před samotným telefonem, osoba s pozicí před osobou bez pozice, zdroj z oficiálního webu před jiným zdrojem.
 - Každý krok scoringu se zapisuje do `ProcessingLog` včetně detailů (`targetRole`, `personId`, `contactId`, `score`, `category`, `reasons`).
+
+
+## Data & exports policy (Git hygiene)
+
+- Do **not** commit runtime crawl data, extracted contacts, exports, logs, or temporary files.
+- Application runtime data belongs in PostgreSQL and/or runtime storage outside the repository.
+- `.gitignore` is configured to exclude generated artifacts (for example `node_modules/`, `exports/`, `data/`, `storage/`, `crawled/`, `tmp/`, logs and common binary export formats).
+
+### Optional local pre-commit protection
+
+Repository includes `.githooks/pre-commit` that blocks:
+- staged files larger than 5 MB,
+- common runtime/binary artifacts (for example `.xlsx`, `.csv`, `.zip`, `.db`, `.sqlite`, `.log`, `.pyc`),
+- runtime directories like `data/`, `storage/`, `crawled/`, `exports/`, and `node_modules/`.
+
+Enable it locally with:
+
+```bash
+git config core.hooksPath .githooks
+```
+

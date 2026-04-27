@@ -1,0 +1,30 @@
+#!/bin/sh
+set -e
+
+max_size=5000000
+
+# block large staged files (>5MB)
+for file in $(git diff --cached --name-only --diff-filter=ACM); do
+  [ -f "$file" ] || continue
+  size=$(wc -c < "$file")
+  if [ "$size" -gt "$max_size" ]; then
+    echo "Commit blocked: file too large (${size} bytes): $file"
+    exit 1
+  fi
+done
+
+# block known runtime/binary artifacts
+blocked_pattern='\.(xlsx|csv|zip|db|sqlite|log|pyc)$'
+for file in $(git diff --cached --name-only --diff-filter=ACM); do
+  case "$file" in
+    data/*|storage/*|crawled/*|exports/*|tmp/*|node_modules/*|backend/node_modules/*|frontend/node_modules/*)
+      echo "Commit blocked: runtime artifact path: $file"
+      exit 1
+      ;;
+  esac
+
+  if echo "$file" | grep -Eiq "$blocked_pattern"; then
+    echo "Commit blocked: disallowed file type: $file"
+    exit 1
+  fi
+done
