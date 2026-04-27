@@ -10,6 +10,7 @@ import { findWebsiteForCompany, normalizeWebsiteUrl } from './website-search.js'
 import { crawlCompanyWebsite } from './crawler.js';
 import { extractCompanyContacts, extractContactsForBatch, updateContactReviewStatus, updatePersonReviewStatus } from './extractor.js';
 import { scoreCompanyContacts, scoreContactsForBatch } from './contact-scoring.js';
+import { buildExportRows, buildSummaryRows, generateCsv, generateXlsx } from './export.js';
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -690,6 +691,142 @@ app.get('/api/search-batches/:id', async (req, res) => {
   }
 
   return res.json(batch);
+});
+
+
+app.get('/api/search-batches/:id/export.csv', async (req, res) => {
+  const batchId = req.params.id;
+
+  const batch = await prisma.searchBatch.findUnique({
+    where: { id: batchId },
+    include: {
+      companies: {
+        include: {
+          contacts: { include: { person: true } },
+          contactScores: true
+        }
+      }
+    }
+  });
+
+  if (!batch) {
+    return res.status(404).json({ error: 'Dávka nebyla nalezena' });
+  }
+
+  if (batch.companies.length === 0) {
+    return res.status(400).json({ error: 'Dávka neobsahuje žádné firmy' });
+  }
+
+  const today = new Date();
+  const exportDate = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+  const fileName = `contacts-export-${batchId}-${exportDate}.csv`;
+
+  try {
+    const rows = buildExportRows(batch);
+    const csv = generateCsv(rows);
+
+    await createProcessingLog({
+      batchId,
+      step: 'export',
+      status: 'success',
+      message: 'CSV export generated',
+      detailJson: {
+        batchId,
+        format: 'csv',
+        exportedRows: rows.length,
+        exportedAt: new Date().toISOString()
+      }
+    });
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    return res.send(Buffer.from(csv, 'utf8'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Chyba generování CSV exportu';
+
+    await createProcessingLog({
+      batchId,
+      step: 'export',
+      status: 'error',
+      message: 'Export failed',
+      detailJson: {
+        batchId,
+        format: 'csv',
+        error: message,
+        exportedAt: new Date().toISOString()
+      }
+    });
+
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.get('/api/search-batches/:id/export.xlsx', async (req, res) => {
+  const batchId = req.params.id;
+
+  const batch = await prisma.searchBatch.findUnique({
+    where: { id: batchId },
+    include: {
+      companies: {
+        include: {
+          contacts: { include: { person: true } },
+          contactScores: true
+        }
+      }
+    }
+  });
+
+  if (!batch) {
+    return res.status(404).json({ error: 'Dávka nebyla nalezena' });
+  }
+
+  if (batch.companies.length === 0) {
+    return res.status(400).json({ error: 'Dávka neobsahuje žádné firmy' });
+  }
+
+  const today = new Date();
+  const exportDate = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, '0')}${String(today.getDate()).padStart(2, '0')}`;
+  const fileName = `contacts-export-${batchId}-${exportDate}.xlsx`;
+
+  try {
+    const rows = buildExportRows(batch);
+    const summaryRows = buildSummaryRows(batch);
+    const workbookBuffer = generateXlsx(rows, summaryRows);
+
+    await createProcessingLog({
+      batchId,
+      step: 'export',
+      status: 'success',
+      message: 'XLSX export generated',
+      detailJson: {
+        batchId,
+        format: 'xlsx',
+        exportedRows: rows.length,
+        exportedAt: new Date().toISOString()
+      }
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    return res.send(workbookBuffer);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Chyba generování XLSX exportu';
+
+    await createProcessingLog({
+      batchId,
+      step: 'export',
+      status: 'error',
+      message: 'Export failed',
+      detailJson: {
+        batchId,
+        format: 'xlsx',
+        error: message,
+        exportedAt: new Date().toISOString()
+      }
+    });
+
+    return res.status(500).json({ error: message });
+  }
 });
 
 app.delete('/api/search-batches/:id', async (req, res) => {
