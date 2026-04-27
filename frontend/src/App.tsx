@@ -645,6 +645,39 @@ function BatchDetailPage() {
     }
   };
 
+
+  const downloadExport = async (format: 'csv' | 'xlsx') => {
+    if (!id) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await fetch(`${API}/search-batches/${id}/export.${format}`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error ?? 'Export selhal');
+      }
+
+      const blob = await response.blob();
+      const now = new Date();
+      const datePart = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
+      const fileName = `contacts-export-${id}-${datePart}.${format}`;
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Stažení exportu selhalo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const reloadCompanyAres = async (companyId: string) => {
     setLoading(true);
     try {
@@ -708,6 +741,8 @@ function BatchDetailPage() {
           <button className="button" onClick={() => void crawlWebsites()} disabled={loading}>Prohledat weby</button>{' '}
           <button className="button" onClick={() => void extractContacts()} disabled={loading}>Extrahovat kontakty</button>{' '}
           <button className="button" onClick={() => void scoreContacts()} disabled={loading}>Vyhodnotit relevanci kontaktů</button>{' '}
+          <button className="button" onClick={() => void downloadExport('csv')} disabled={loading}>Export CSV</button>{' '}
+          <button className="button" onClick={() => void downloadExport('xlsx')} disabled={loading}>Export XLSX</button>{' '}
           <button className="button" onClick={() => void load()} disabled={loading}>Refresh</button>
         </div>
       </div>
