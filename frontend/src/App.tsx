@@ -46,9 +46,26 @@ type Company = {
   websiteDomain: string | null;
   websiteConfidenceScore: number | null;
   websiteFoundAt: string | null;
+  crawledAt: string | null;
+  crawledPagesCount: number | null;
+  crawlErrorMessage: string | null;
   status: string;
   errorMessage: string | null;
   websites: CompanyWebsite[];
+  crawledPages: CrawledPage[];
+};
+
+type CrawledPage = {
+  id: string;
+  url: string;
+  title: string | null;
+  textContent: string | null;
+  htmlContent: string | null;
+  httpStatus: number | null;
+  depth: number;
+  crawlStatus: string;
+  errorMessage: string | null;
+  createdAt: string;
 };
 
 type ImportLog = {
@@ -278,6 +295,53 @@ function CompanyDetail({ company, onSelect }: { company: Company; onSelect: (url
           )}
         </tbody>
       </table>
+
+      <h3>Stažené stránky</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>URL</th>
+            <th>Titulek</th>
+            <th>HTTP status</th>
+            <th>Depth</th>
+            <th>crawlStatus</th>
+            <th>Délka textu</th>
+            <th>Staženo</th>
+            <th>Chyba</th>
+          </tr>
+        </thead>
+        <tbody>
+          {company.crawledPages.map((page) => (
+            <tr key={page.id}>
+              <td><a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></td>
+              <td>{page.title ?? '—'}</td>
+              <td>{page.httpStatus ?? '—'}</td>
+              <td>{page.depth}</td>
+              <td>{page.crawlStatus}</td>
+              <td>{page.textContent?.length ?? 0}</td>
+              <td>{new Date(page.createdAt).toLocaleString('cs-CZ')}</td>
+              <td>{page.errorMessage ?? '—'}</td>
+            </tr>
+          ))}
+          {company.crawledPages.length === 0 && (
+            <tr><td colSpan={8}>Žádné stažené stránky</td></tr>
+          )}
+        </tbody>
+      </table>
+
+      {company.crawledPages.map((page) => (
+        <details key={`${page.id}-detail`}>
+          <summary>Detail stránky: {page.title ?? page.url}</summary>
+          <p><strong>URL:</strong> <a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></p>
+          <p><strong>Titulek:</strong> {page.title ?? '—'}</p>
+          <h4>Čistý text</h4>
+          <pre className="page-content">{page.textContent ?? '—'}</pre>
+          <details>
+            <summary>Zdrojové HTML</summary>
+            <pre className="page-content">{page.htmlContent ?? '—'}</pre>
+          </details>
+        </details>
+      ))}
     </details>
   );
 }
@@ -332,6 +396,22 @@ function BatchDetailPage() {
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Vyhledání webů selhalo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const crawlWebsites = async () => {
+    if (!id) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await api(`/search-batches/${id}/crawl`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Crawling webů selhal');
     } finally {
       setLoading(false);
     }
@@ -397,6 +477,7 @@ function BatchDetailPage() {
         <div>
           <button className="button" onClick={() => void startProcessing()} disabled={loading}>Spustit zpracování</button>{' '}
           <button className="button" onClick={() => void findWebsites()} disabled={loading}>Dohledat weby firem</button>{' '}
+          <button className="button" onClick={() => void crawlWebsites()} disabled={loading}>Prohledat weby</button>{' '}
           <button className="button" onClick={() => void load()} disabled={loading}>Refresh</button>
         </div>
       </div>
@@ -413,8 +494,9 @@ function BatchDetailPage() {
             <th>Adresa</th>
             <th>Web firmy</th>
             <th>Website confidence</th>
-            <th>Status zpracování</th>
-            <th>Chyba</th>
+            <th>Počet stažených stránek</th>
+            <th>Stav crawlování</th>
+            <th>Chyba crawlu</th>
             <th>Akce</th>
           </tr>
         </thead>
@@ -426,8 +508,9 @@ function BatchDetailPage() {
               <td>{company.addressText ?? '—'}</td>
               <td>{company.websiteUrl ? <a href={company.websiteUrl} target="_blank" rel="noreferrer">{company.websiteDomain ?? company.websiteUrl}</a> : '—'}</td>
               <td>{company.websiteConfidenceScore ?? '—'}</td>
+              <td>{company.crawledPagesCount ?? 0}</td>
               <td>{company.status}</td>
-              <td>{company.errorMessage ?? '—'}</td>
+              <td>{company.crawlErrorMessage ?? company.errorMessage ?? '—'}</td>
               <td>
                 <button className="button" onClick={() => void reloadCompanyAres(company.id)} disabled={loading}>Reload ARES</button>{' '}
                 <button className="button" onClick={() => void findCompanyWebsite(company.id)} disabled={loading}>Najít web</button>
