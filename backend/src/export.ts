@@ -161,10 +161,21 @@ function csvEscape(value: string): string {
   return value;
 }
 
+function neutralizeCsvFormula(value: string): string {
+  if (value.length === 0) {
+    return value;
+  }
+
+  const dangerousLeadingChars = new Set(['=', '+', '-', '@']);
+  return dangerousLeadingChars.has(value[0]) ? `'${value}` : value;
+}
+
 export function generateCsv(rows: ExportRow[]): string {
   const header = EXPORT_COLUMNS.join(';');
   const body = rows
-    .map((row) => EXPORT_COLUMNS.map((column) => csvEscape(String(row[column] ?? ''))).join(';'))
+    .map((row) =>
+      EXPORT_COLUMNS.map((column) => csvEscape(neutralizeCsvFormula(String(row[column] ?? '')))).join(';')
+    )
     .join('\n');
 
   return `${header}\n${body}`;
