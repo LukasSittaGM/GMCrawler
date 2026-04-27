@@ -1,5 +1,6 @@
 import { ContactType, Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
+import { scoreCompanyContacts } from './contact-scoring.js';
 
 type CandidatePerson = {
   key: string;
@@ -448,6 +449,8 @@ export async function extractCompanyContacts(companyId: string): Promise<{ perso
       }
     }
   });
+
+  await scoreCompanyContacts(company.id);
 
   return {
     personsCount,

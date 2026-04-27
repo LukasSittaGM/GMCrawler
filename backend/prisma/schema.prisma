@@ -86,6 +86,13 @@ enum ContactType {
   other
 }
 
+enum ContactScoreCategory {
+  high
+  medium
+  low
+  needs_review
+}
+
 model SearchBatch {
   id             String            @id @default(cuid())
   name           String
@@ -128,6 +135,10 @@ model Company {
   personsCount          Int?          @default(0)
   contactsCount         Int?          @default(0)
   extractionErrorMessage String?
+  bestPersonId          String?
+  bestContactId         String?
+  bestContactScore      Int?
+  scoredAt              DateTime?
   status                CompanyStatus @default(pending)
   errorMessage          String?
   createdAt             DateTime      @default(now())
@@ -139,6 +150,7 @@ model Company {
   crawledPages    CrawledPage[]
   persons         CompanyPerson[]
   contacts        CompanyContact[]
+  contactScores   ContactScore[]
 
   @@unique([batchId, ico])
   @@index([batchId])
@@ -245,6 +257,7 @@ model CompanyPerson {
   company  Company          @relation(fields: [companyId], references: [id], onDelete: Cascade)
   page     CrawledPage      @relation(fields: [sourcePageId], references: [id], onDelete: Cascade)
   contacts CompanyContact[]
+  contactScores ContactScore[]
 
   @@index([companyId, createdAt])
   @@index([companyId, fullName])
@@ -269,7 +282,30 @@ model CompanyContact {
   company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   person  CompanyPerson? @relation(fields: [personId], references: [id], onDelete: SetNull)
   page    CrawledPage   @relation(fields: [sourcePageId], references: [id], onDelete: Cascade)
+  contactScores ContactScore[]
 
   @@index([companyId, normalizedValue])
   @@index([companyId, personId])
+}
+
+model ContactScore {
+  id         String               @id @default(cuid())
+  companyId  String
+  personId   String?
+  contactId  String?
+  targetRole String
+  score      Int
+  category   ContactScoreCategory
+  reasonsJson Json
+  createdAt  DateTime             @default(now())
+  updatedAt  DateTime             @updatedAt
+
+  company Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  person  CompanyPerson? @relation(fields: [personId], references: [id], onDelete: SetNull)
+  contact CompanyContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, score])
+  @@index([companyId, category])
+  @@index([personId])
+  @@index([contactId])
 }
