@@ -48,6 +48,20 @@ enum CompanyWebsiteSource {
   other
 }
 
+enum CrawledPageSource {
+  website_root
+  internal_link
+  sitemap
+  manual
+}
+
+enum CrawledPageStatus {
+  pending
+  fetched
+  skipped
+  error
+}
+
 model SearchBatch {
   id             String            @id @default(cuid())
   name           String
@@ -83,6 +97,9 @@ model Company {
   websiteDomain         String?
   websiteConfidenceScore Int?
   websiteFoundAt        DateTime?
+  crawledAt             DateTime?
+  crawledPagesCount     Int?          @default(0)
+  crawlErrorMessage     String?
   status                CompanyStatus @default(pending)
   errorMessage          String?
   createdAt             DateTime      @default(now())
@@ -91,9 +108,35 @@ model Company {
   batch           SearchBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
   processingLogs  ProcessingLog[]
   websites        CompanyWebsite[]
+  crawledPages    CrawledPage[]
 
   @@unique([batchId, ico])
   @@index([batchId])
+}
+
+model CrawledPage {
+  id                String            @id @default(cuid())
+  companyId         String
+  url               String
+  normalizedUrl     String
+  domain            String
+  title             String?
+  htmlContent       String?
+  textContent       String?
+  httpStatus        Int?
+  contentType       String?
+  depth             Int               @default(0)
+  source            CrawledPageSource
+  crawlStatus       CrawledPageStatus @default(pending)
+  errorMessage      String?
+  discoveredFromUrl String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, createdAt])
+  @@index([companyId, normalizedUrl])
 }
 
 model CompanyWebsite {

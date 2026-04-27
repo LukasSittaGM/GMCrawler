@@ -7,6 +7,7 @@ import { prisma } from './prisma.js';
 import { buildImportSummary, parseFile } from './import.js';
 import { AresError, AresService, waitAresDelay } from './ares.js';
 import { findWebsiteForCompany, normalizeWebsiteUrl } from './website-search.js';
+import { crawlCompanyWebsite } from './crawler.js';
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -332,6 +333,137 @@ app.post('/api/search-batches/:id/find-websites', async (req, res) => {
   });
 });
 
+app.post('/api/companies/:id/crawl', async (req, res) => {
+  const company = await prisma.company.findUnique({ where: { id: req.params.id } });
+
+  if (!company) {
+    return res.status(404).json({ error: 'Firma nebyla nalezena' });
+  }
+
+  if (!company.websiteUrl) {
+    return res.status(400).json({ error: 'Firma nemá vyplněný websiteUrl' });
+  }
+
+  await prisma.company.update({
+    where: { id: company.id },
+    data: {
+      status: 'crawling',
+      errorMessage: null,
+      crawlErrorMessage: null
+    }
+  });
+
+  try {
+    const result = await crawlCompanyWebsite(company.id);
+    await prisma.company.update({
+      where: { id: company.id },
+      data: {
+        status: 'extracting',
+        crawledAt: new Date(),
+        crawledPagesCount: result.fetchedPages,
+        crawlErrorMessage: null,
+        errorMessage: null
+      }
+    });
+
+    return res.json({ companyId: company.id, ...result, status: 'extracting' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Company crawl failed';
+    await prisma.company.update({
+      where: { id: company.id },
+      data: {
+        status: 'error',
+        errorMessage: message,
+        crawlErrorMessage: message
+      }
+    });
+
+    await createProcessingLog({
+      batchId: company.batchId,
+      companyId: company.id,
+      step: 'crawl',
+      status: 'error',
+      message: 'Company crawl failed',
+      detailJson: { error: message }
+    });
+
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/search-batches/:id/crawl', async (req, res) => {
+  const batchId = req.params.id;
+  const batch = await prisma.searchBatch.findUnique({ where: { id: batchId } });
+
+  if (!batch) {
+    return res.status(404).json({ error: 'Dávka nebyla nalezena' });
+  }
+
+  const companies = await prisma.company.findMany({
+    where: {
+      batchId,
+      status: 'crawling'
+    },
+    orderBy: { createdAt: 'asc' }
+  });
+
+  let successCount = 0;
+  let errorCount = 0;
+
+  for (const company of companies) {
+    try {
+      await prisma.company.update({
+        where: { id: company.id },
+        data: {
+          status: 'crawling',
+          errorMessage: null,
+          crawlErrorMessage: null
+        }
+      });
+
+      const result = await crawlCompanyWebsite(company.id);
+      await prisma.company.update({
+        where: { id: company.id },
+        data: {
+          status: 'extracting',
+          crawledAt: new Date(),
+          crawledPagesCount: result.fetchedPages,
+          crawlErrorMessage: null,
+          errorMessage: null
+        }
+      });
+      successCount += 1;
+    } catch (error) {
+      errorCount += 1;
+      const message = error instanceof Error ? error.message : 'Company crawl failed';
+      await prisma.company.update({
+        where: { id: company.id },
+        data: {
+          status: 'error',
+          errorMessage: message,
+          crawlErrorMessage: message
+        }
+      });
+
+      await createProcessingLog({
+        batchId: company.batchId,
+        companyId: company.id,
+        step: 'crawl',
+        status: 'error',
+        message: 'Company crawl failed',
+        detailJson: { error: message }
+      });
+    }
+  }
+
+  return res.json({
+    batchId,
+    processed: companies.length,
+    successCount,
+    errorCount
+  });
+});
+
 app.patch('/api/companies/:id/website', async (req, res) => {
   const parsed = manualWebsiteSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -414,7 +546,10 @@ app.get('/api/search-batches/:id', async (req, res) => {
     include: {
       companies: {
         orderBy: { createdAt: 'asc' },
-        include: { websites: { orderBy: [{ isSelected: 'desc' }, { confidenceScore: 'desc' }] } }
+        include: {
+          websites: { orderBy: [{ isSelected: 'desc' }, { confidenceScore: 'desc' }] },
+          crawledPages: { orderBy: { createdAt: 'desc' } }
+        }
       },
       importLogs: { orderBy: { rowNumber: 'asc' } },
       processingLogs: { orderBy: { createdAt: 'desc' } }
