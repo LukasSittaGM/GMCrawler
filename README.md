@@ -51,6 +51,10 @@ Samostatná `worker` služba je připravena v `docker-compose.yml` pro budoucí 
 docker compose up --build
 ```
 
+Po spuštění otevři:
+- Frontend UI: `http://localhost:5173`
+- Backend API healthcheck: `http://localhost:3001/api/health`
+
 ## Produkční běh (základ)
 - Nastav `NODE_ENV=production`
 - Nastav silný `SESSION_SECRET`
