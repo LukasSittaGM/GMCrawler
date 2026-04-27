@@ -3,6 +3,12 @@ const toInt = (value: string | undefined, fallback: number): number => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 
+const sessionSecret = process.env.SESSION_SECRET;
+
+if (!sessionSecret || sessionSecret === 'dev-secret') {
+  throw new Error('SESSION_SECRET must be set and must not use the default "dev-secret" value.');
+}
+
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? 'development',
   appBaseUrl: process.env.APP_BASE_URL ?? 'http://localhost:5173',
@@ -20,7 +26,7 @@ export const config = {
   maxSearchQueriesPerCompany: toInt(process.env.MAX_SEARCH_QUERIES_PER_COMPANY ?? process.env.WEBSITE_SEARCH_MAX_QUERIES, 6),
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@example.com',
   adminPasswordHash: process.env.ADMIN_PASSWORD_HASH ?? '',
-  sessionSecret: process.env.SESSION_SECRET ?? 'dev-secret'
+  sessionSecret
 } as const;
 
 export type BatchStep =
