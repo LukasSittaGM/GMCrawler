@@ -9,6 +9,7 @@ import { AresError, AresService, waitAresDelay } from './ares.js';
 import { findWebsiteForCompany, normalizeWebsiteUrl } from './website-search.js';
 import { crawlCompanyWebsite } from './crawler.js';
 import { extractCompanyContacts, extractContactsForBatch, updateContactReviewStatus, updatePersonReviewStatus } from './extractor.js';
+import { scoreCompanyContacts, scoreContactsForBatch } from './contact-scoring.js';
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -510,6 +511,32 @@ app.post('/api/search-batches/:id/extract-contacts', async (req, res) => {
   return res.json({ batchId, ...result });
 });
 
+app.post('/api/companies/:id/score-contacts', async (req, res) => {
+  const company = await prisma.company.findUnique({ where: { id: req.params.id } });
+  if (!company) {
+    return res.status(404).json({ error: 'Firma nebyla nalezena' });
+  }
+
+  try {
+    const result = await scoreCompanyContacts(company.id);
+    return res.json({ companyId: company.id, ...result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Scoring kontaktů selhal';
+    return res.status(500).json({ error: message });
+  }
+});
+
+app.post('/api/search-batches/:id/score-contacts', async (req, res) => {
+  const batchId = req.params.id;
+  const batch = await prisma.searchBatch.findUnique({ where: { id: batchId } });
+  if (!batch) {
+    return res.status(404).json({ error: 'Dávka nebyla nalezena' });
+  }
+
+  const result = await scoreContactsForBatch(batchId);
+  return res.json({ batchId, ...result });
+});
+
 app.patch('/api/company-contacts/:id/review-status', async (req, res) => {
   const parsed = reviewStatusSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -624,7 +651,8 @@ app.get('/api/search-batches/:id', async (req, res) => {
           websites: { orderBy: [{ isSelected: 'desc' }, { confidenceScore: 'desc' }] },
           crawledPages: { orderBy: { createdAt: 'desc' } },
           persons: { orderBy: [{ confidenceScore: 'desc' }, { createdAt: 'desc' }] },
-          contacts: { orderBy: [{ confidenceScore: 'desc' }, { createdAt: 'desc' }], include: { person: true } }
+          contacts: { orderBy: [{ confidenceScore: 'desc' }, { createdAt: 'desc' }], include: { person: true } },
+          contactScores: { orderBy: [{ score: 'desc' }, { createdAt: 'desc' }], include: { person: true, contact: true } }
         }
       },
       importLogs: { orderBy: { rowNumber: 'asc' } },
