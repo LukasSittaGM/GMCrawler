@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { createRequire } from 'module';
 import type { Request, Response, NextFunction } from 'express';
 import { config } from './config.js';
 
@@ -21,6 +22,35 @@ function parseCookies(req: Request): Record<string, string> {
 
 export function hashPassword(password: string): string {
   return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+type VerifyAdminResult =
+  | { ok: true }
+  | { ok: false; reason: 'invalid_credentials' | 'missing_config' };
+
+type BcryptModule = {
+  compare: (password: string, hash: string) => Promise<boolean> | boolean;
+};
+
+let bcryptModulePromise: Promise<BcryptModule | null> | null = null;
+const require = createRequire(import.meta.url);
+
+async function loadBcryptModule(): Promise<BcryptModule | null> {
+  if (!bcryptModulePromise) {
+    bcryptModulePromise = (async () => {
+      try {
+        return require('bcrypt') as BcryptModule;
+      } catch {
+        // continue
+      }
+      try {
+        return require('bcryptjs') as BcryptModule;
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return bcryptModulePromise;
 }
 
 export function issueSession(res: Response, email: string): void {
@@ -57,10 +87,26 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
   next();
 }
 
-export function verifyAdmin(email: string, password: string): boolean {
-  if (!config.adminPasswordHash) {
-    return false;
+export async function verifyAdmin(email: string, password: string): Promise<VerifyAdminResult> {
+  if (email.trim().toLowerCase() !== config.adminEmail.toLowerCase()) {
+    return { ok: false, reason: 'invalid_credentials' };
   }
 
-  return email.trim().toLowerCase() === config.adminEmail.toLowerCase() && hashPassword(password) === config.adminPasswordHash;
+  if (config.adminPasswordHash.trim()) {
+    const bcrypt = await loadBcryptModule();
+    if (!bcrypt) {
+      console.error('Admin password hash is set but bcrypt library is not installed');
+      return { ok: false, reason: 'missing_config' };
+    }
+    const isValid = await bcrypt.compare(password, config.adminPasswordHash);
+    return isValid ? { ok: true } : { ok: false, reason: 'invalid_credentials' };
+  }
+
+  if (config.nodeEnv === 'development' && config.adminPassword) {
+    return config.adminPassword === password
+      ? { ok: true }
+      : { ok: false, reason: 'invalid_credentials' };
+  }
+
+  return { ok: false, reason: 'missing_config' };
 }
