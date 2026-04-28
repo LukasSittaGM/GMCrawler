@@ -15,12 +15,28 @@ cd ../frontend && npm install
 Vyplň minimálně:
 - `DATABASE_URL`
 - `ADMIN_EMAIL`
-- `ADMIN_PASSWORD_HASH` (SHA-256 hash hesla)
+- `ADMIN_PASSWORD_HASH` (bcrypt hash hesla pro produkci)
 - `SESSION_SECRET`
 
-Příklad hashování hesla:
+Lokální vývoj (doporučeno):
+```env
+NODE_ENV=development
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=admin
+ADMIN_PASSWORD_HASH=
+SESSION_SECRET=local-dev-secret
+```
+
+Přihlášení pak funguje přes:
+- email: `admin@example.com`
+- heslo: `admin`
+
+Produkce / bezpečnější režim: nastav `ADMIN_PASSWORD_HASH` na bcrypt hash.
+
+Příklad vytvoření bcrypt hashe:
 ```bash
-node -e "console.log(require('crypto').createHash('sha256').update('mojeheslo').digest('hex'))"
+cd backend
+node -e "const bcrypt=require('bcryptjs'); bcrypt.hash('mojeheslo', 10).then(console.log)"
 ```
 
 ## Migrace DB

@@ -19,6 +19,7 @@ export const config = {
   maxPageTextLength: toInt(process.env.MAX_PAGE_TEXT_LENGTH, 100000),
   maxSearchQueriesPerCompany: toInt(process.env.MAX_SEARCH_QUERIES_PER_COMPANY ?? process.env.WEBSITE_SEARCH_MAX_QUERIES, 6),
   adminEmail: process.env.ADMIN_EMAIL ?? 'admin@example.com',
+  adminPassword: process.env.ADMIN_PASSWORD ?? '',
   adminPasswordHash: process.env.ADMIN_PASSWORD_HASH ?? '',
   sessionSecret: process.env.SESSION_SECRET ?? 'dev-secret'
 } as const;

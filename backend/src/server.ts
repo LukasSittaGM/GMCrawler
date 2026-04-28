@@ -207,9 +207,16 @@ app.post('/api/login', async (req, res) => {
   if (!parsed.success) {
     return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid login payload', detail: parsed.error.flatten() } });
   }
-  if (!verifyAdmin(parsed.data.email, parsed.data.password)) {
+
+  const authResult = await verifyAdmin(parsed.data.email, parsed.data.password);
+  if (!authResult.ok && authResult.reason === 'missing_config') {
+    console.error('Admin password is not configured');
+    return res.status(500).json({ error: { code: 'CONFIG_ERROR', message: 'Server authentication is not configured', detail: {} } });
+  }
+  if (!authResult.ok) {
     return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid credentials', detail: {} } });
   }
+
   issueSession(res, parsed.data.email);
   return res.json({ ok: true, email: parsed.data.email });
 });
