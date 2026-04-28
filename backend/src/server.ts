@@ -20,7 +20,12 @@ const upload = multer({ storage: multer.memoryStorage() });
 const port = Number(process.env.PORT ?? 3001);
 const aresService = new AresService();
 
-app.use(cors({ origin: config.appBaseUrl, credentials: true }));
+app.use(cors({
+  origin: config.appBaseUrl,
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 app.use((req, res, next) => {
   const originalJson = res.json.bind(res);
@@ -202,7 +207,7 @@ async function processCompanyAres(companyId: string): Promise<{ success: boolean
   }
 }
 
-app.post('/api/login', async (req, res) => {
+const loginHandler = async (req: express.Request, res: express.Response) => {
   const parsed = loginSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid login payload', detail: parsed.error.flatten() } });
@@ -219,7 +224,10 @@ app.post('/api/login', async (req, res) => {
 
   issueSession(res, parsed.data.email);
   return res.json({ ok: true, email: parsed.data.email });
-});
+};
+
+app.post('/api/auth/login', loginHandler);
+app.post('/api/login', loginHandler);
 
 app.post('/api/logout', (_req, res) => {
   clearSession(res);

@@ -65,7 +65,12 @@ export function clearSession(res: Response): void {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  if (req.path === '/api/login' || req.path === '/api/health') {
+  if (req.method === 'OPTIONS') {
+    next();
+    return;
+  }
+
+  if (req.path === '/api/auth/login' || req.path === '/api/login' || req.path === '/api/health') {
     next();
     return;
   }
