@@ -9,4 +9,4 @@ COPY . /app
 RUN cd backend && npx prisma generate && npm run build && cd /app/frontend && npm run build
 
 EXPOSE 3001 5173
-CMD ["sh", "-c", "cd backend && npm start"]
+CMD ["sh", "-c", "cd backend && npm run start:docker"]

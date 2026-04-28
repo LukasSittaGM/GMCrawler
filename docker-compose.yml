@@ -18,6 +18,7 @@ services:
 
   app:
     build: .
+    command: sh -c "cd backend && npm run start:docker"
     env_file:
       - .env
     environment:
@@ -40,7 +41,7 @@ services:
 
   worker:
     build: .
-    command: sh -c "cd backend && npm run dev"
+    command: sh -c "cd backend && npm run dev:docker"
     env_file:
       - .env
     environment:
