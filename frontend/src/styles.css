@@ -71,6 +71,7 @@ input, textarea {
 
 .error {
   color: #c1121f;
+  white-space: pre-wrap;
 }
 
 .page-content {
@@ -177,4 +178,33 @@ summary {
   cursor: pointer;
   font-weight: 600;
   margin: 0.25rem 0 0.6rem;
+}
+
+.hint {
+  display: block;
+  margin-top: 0.35rem;
+  color: #475569;
+}
+
+.chips {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+.chip {
+  background: #e2e8f0;
+  color: #0f172a;
+  border: 1px solid #cbd5e1;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+}
+
+.error-stack {
+  padding: 0.75rem;
+  border-radius: 0.4rem;
+  background: #111827;
+  color: #f8fafc;
+  overflow: auto;
 }

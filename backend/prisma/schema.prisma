@@ -99,6 +99,7 @@ model SearchBatch {
   name           String
   note           String?
   targetRole     String?
+  normalizedTargetRole String?
   status         SearchBatchStatus @default(draft)
   currentStep    String            @default("import")
   progressPercent Int              @default(0)
