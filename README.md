@@ -37,6 +37,31 @@ Frontend API endpoint pro lokální vývoj:
 
 Produkce / bezpečnější režim: nastav `ADMIN_PASSWORD_HASH` na bcrypt hash.
 
+## Web search provider
+- `SEARCH_PROVIDER=mock` používá lokální mock výsledky (bez API klíče).
+- `SEARCH_PROVIDER=serpapi` používá SerpAPI (`SEARCH_API_KEY` je povinný).
+- `SEARCH_PROVIDER=bing` používá Bing Web Search (`SEARCH_API_KEY` je povinný).
+
+Doporučené proměnné:
+```env
+SEARCH_PROVIDER=mock
+SEARCH_API_KEY=
+SEARCH_TIMEOUT_MS=15000
+SEARCH_MAX_RESULTS=10
+SEARCH_COUNTRY=cz
+SEARCH_LANGUAGE=cs
+MAX_SEARCH_QUERIES_PER_COMPANY=8
+```
+
+Rozdíl mock vs real search:
+- **mock**: deterministické testovací výsledky, bez externích nákladů.
+- **real search (SerpAPI/Bing)**: reálné indexované zdroje, lepší šance najít kontakty a osoby.
+
+V UI lze web search spustit:
+- na detailu dávky tlačítkem **Spustit web search**
+- na detailu firmy tlačítkem **Spustit web search**
+- výsledky jsou vidět v sekci **Web search výsledky**, kde lze použít výsledek jako web firmy nebo spustit crawl konkrétní URL.
+
 Příklad vytvoření bcrypt hashe:
 ```bash
 cd backend

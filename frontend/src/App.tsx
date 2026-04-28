@@ -34,6 +34,18 @@ type CompanyWebsite = {
   reason: string | null;
 };
 
+type SearchResult = {
+  id: string;
+  query: string;
+  title: string;
+  url: string;
+  snippet: string | null;
+  provider: string;
+  rank: number;
+  resultType: string;
+  confidenceScore: number;
+};
+
 type Company = {
   id: string;
   ico: string;
@@ -70,6 +82,7 @@ type Company = {
   status: string;
   errorMessage: string | null;
   websites?: CompanyWebsite[];
+  searchResults?: SearchResult[];
   crawledPages?: CrawledPage[];
   persons?: CompanyPerson[];
   contacts?: CompanyContact[];
@@ -379,7 +392,13 @@ function NewBatchPage() {
   );
 }
 
-function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onSelect: (url: string) => Promise<void>; onChanged: () => Promise<void> }) {
+function CompanyDetail({ company, onSelect, onChanged, onRunWebSearch, onCrawlUrl }: {
+  company: Company;
+  onSelect: (url: string) => Promise<void>;
+  onChanged: () => Promise<void>;
+  onRunWebSearch: () => Promise<void>;
+  onCrawlUrl: (url: string) => Promise<void>;
+}) {
   const [manualWebsiteUrl, setManualWebsiteUrl] = useState('');
   const [newPersonName, setNewPersonName] = useState('');
   const [newPersonPosition, setNewPersonPosition] = useState('');
@@ -399,6 +418,7 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
   const companyContacts = company.contacts ?? [];
   const companyPersons = company.persons ?? [];
   const companyCrawledPages = company.crawledPages ?? [];
+  const companySearchResults = company.searchResults ?? [];
   const companyContactScores = company.contactScores ?? [];
 
   const reviewContact = async (contactId: string, reviewStatus: 'confirmed' | 'rejected' | 'manually_edited') => {
@@ -555,7 +575,32 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
       <div className="manual-pick">
         <input placeholder="https://www.firma.cz" value={manualWebsiteUrl} onChange={(e) => setManualWebsiteUrl(e.target.value)} />
         <button className="button" onClick={() => { void onSelect(manualWebsiteUrl); setManualWebsiteUrl(''); }}>Nastavit ručně</button>
+        <button className="button" onClick={() => void onRunWebSearch()}>Spustit web search</button>
       </div>
+
+      <h4>Web search výsledky</h4>
+      <table>
+        <thead><tr><th>Query</th><th>Title</th><th>URL</th><th>Snippet</th><th>Provider</th><th>Rank</th><th>Type</th><th>Score</th><th>Akce</th></tr></thead>
+        <tbody>
+          {companySearchResults.map((result) => (
+            <tr key={result.id}>
+              <td>{result.query}</td>
+              <td>{result.title}</td>
+              <td><a href={result.url} target="_blank" rel="noreferrer">{result.url}</a></td>
+              <td>{result.snippet ?? '—'}</td>
+              <td>{result.provider}</td>
+              <td>{result.rank}</td>
+              <td>{result.resultType}</td>
+              <td>{result.confidenceScore}</td>
+              <td>
+                <button className="button" onClick={() => void onSelect(result.url)}>Použít jako web firmy</button>{' '}
+                <button className="button" onClick={() => void onCrawlUrl(result.url)}>Crawl this URL</button>
+              </td>
+            </tr>
+          ))}
+          {companySearchResults.length === 0 && <tr><td colSpan={9}>Zatím bez web search výsledků.</td></tr>}
+        </tbody>
+      </table>
 
       <h4>Stažené stránky</h4>
       <table>
@@ -794,6 +839,46 @@ function BatchDetailPage() {
     }
   };
 
+  const runCompanyWebSearch = async (companyId: string) => {
+    setLoading(true);
+    try {
+      await api(`/companies/${companyId}/web-search`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(toErrorMessage(e, 'Web search firmy selhal.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const runBatchWebSearch = async () => {
+    if (!id) {
+      return;
+    }
+    setLoading(true);
+    try {
+      await api(`/search-batches/${id}/web-search`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(toErrorMessage(e, 'Web search dávky selhal.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const crawlSpecificUrl = async (companyId: string, url: string) => {
+    setLoading(true);
+    try {
+      await setManualWebsite(companyId, url);
+      await api(`/companies/${companyId}/crawl`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(toErrorMessage(e, 'Crawl URL selhal.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const setBestAsFinal = async (company: Company) => {
     const bestScore = getBestScore(company);
     if (!bestScore?.contact?.id) {
@@ -849,6 +934,7 @@ function BatchDetailPage() {
         <h1>{batch.name}</h1>
         <div>
           <button className="button" onClick={() => void startProcessing()} disabled={loading}>Spustit zpracování</button>{' '}
+          <button className="button" onClick={() => void runBatchWebSearch()} disabled={loading}>Spustit web search</button>{' '}
           <button className="button" onClick={() => void retryFailed()} disabled={loading}>Retry failed</button>{' '}
           <button className="button" onClick={() => void downloadExport('csv')} disabled={loading}>Export CSV</button>{' '}
           <button className="button" onClick={() => void downloadExport('xlsx')} disabled={loading}>Export XLSX</button>{' '}
@@ -917,6 +1003,8 @@ function BatchDetailPage() {
           company={company}
           onSelect={async (url) => setManualWebsite(company.id, url)}
           onChanged={load}
+          onRunWebSearch={async () => runCompanyWebSearch(company.id)}
+          onCrawlUrl={async (url) => crawlSpecificUrl(company.id, url)}
         />
       ))}
 

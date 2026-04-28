@@ -94,6 +94,16 @@ enum ContactScoreCategory {
   needs_review
 }
 
+enum SearchResultType {
+  official_website_candidate
+  contact_page_candidate
+  person_candidate
+  pdf_candidate
+  registry
+  social
+  other
+}
+
 model SearchBatch {
   id             String            @id @default(cuid())
   name           String
@@ -113,6 +123,7 @@ model SearchBatch {
   companies      Company[]
   importLogs     ImportLog[]
   processingLogs ProcessingLog[]
+  searchResults  SearchResult[]
 }
 
 model Company {
@@ -162,6 +173,7 @@ model Company {
   persons         CompanyPerson[]
   contacts        CompanyContact[]
   contactScores   ContactScore[]
+  searchResults   SearchResult[]
 
   @@unique([batchId, ico])
   @@index([batchId])
@@ -323,4 +335,31 @@ model ContactScore {
   @@index([companyId, category])
   @@index([personId])
   @@index([contactId])
+}
+
+model SearchResult {
+  id               String           @id @default(cuid())
+  companyId        String
+  batchId          String
+  query            String
+  title            String
+  url              String
+  normalizedUrl    String
+  normalizedDomain String
+  snippet          String?
+  provider         String
+  rank             Int
+  resultType       SearchResultType @default(other)
+  confidenceScore  Int              @default(0)
+  isProcessed      Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  batch   SearchBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, query, normalizedUrl])
+  @@index([companyId, confidenceScore])
+  @@index([batchId, createdAt])
+  @@index([companyId, normalizedDomain])
 }
