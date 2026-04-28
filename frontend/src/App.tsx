@@ -1,5 +1,5 @@
 import { Link, Route, Routes, useParams } from 'react-router-dom';
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, Fragment, useEffect, useMemo, useState } from 'react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
 
@@ -205,19 +205,8 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
   return <div><h1>Přihlášení</h1><form onSubmit={submit} className="form"><input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" /><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Heslo" />{error && <p className="error">{error}</p>}<button className="button" type="submit">Přihlásit</button></form></div>;
 }
 
-function scoreCategoryLabel(category: ContactScore['category'] | null | undefined): string {
-  if (!category) {
-    return '—';
-  }
-
-  const labels: Record<ContactScore['category'], string> = {
-    high: 'Vysoké',
-    medium: 'Střední',
-    low: 'Nízké',
-    needs_review: 'Nutná kontrola'
-  };
-
-  return labels[category];
+function getBestScore(company: Company): ContactScore | undefined {
+  return company.contactScores.find((item) => item.contactId === company.bestContactId) ?? company.contactScores[0];
 }
 
 function BatchListPage() {
@@ -359,6 +348,7 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
   const [editContactValue, setEditContactValue] = useState('');
   const [editContactType, setEditContactType] = useState<'email' | 'phone' | 'general_email' | 'general_phone' | 'other'>('email');
   const [localError, setLocalError] = useState<string | null>(null);
+  const [expandedPageId, setExpandedPageId] = useState<string | null>(null);
 
   const reviewContact = async (contactId: string, reviewStatus: 'confirmed' | 'rejected' | 'manually_edited') => {
     setLocalError(null);
@@ -516,6 +506,48 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
         <button className="button" onClick={() => { void onSelect(manualWebsiteUrl); setManualWebsiteUrl(''); }}>Nastavit ručně</button>
       </div>
 
+      <h4>Stažené stránky</h4>
+      <table>
+        <thead>
+          <tr>
+            <th>URL</th>
+            <th>Status</th>
+            <th>Délka textu</th>
+            <th>Datum</th>
+            <th>Akce</th>
+          </tr>
+        </thead>
+        <tbody>
+          {company.crawledPages.map((page) => (
+            <Fragment key={page.id}>
+              <tr>
+                <td><a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></td>
+                <td>{page.httpStatus ?? page.crawlStatus}</td>
+                <td>{page.textContent?.length ?? 0}</td>
+                <td>{new Date(page.createdAt).toLocaleString('cs-CZ')}</td>
+                <td>
+                  <button className="button" onClick={() => setExpandedPageId((current) => current === page.id ? null : page.id)}>
+                    {expandedPageId === page.id ? 'Skrýt detail' : 'Detail'}
+                  </button>
+                </td>
+              </tr>
+              {expandedPageId === page.id && (
+                <tr>
+                  <td colSpan={5}>
+                    <div className="page-content">{page.textContent ?? page.errorMessage ?? 'Bez obsahu'}</div>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
+          ))}
+          {company.crawledPages.length === 0 && (
+            <tr>
+              <td colSpan={5}>Žádné stažené stránky.</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
       <h4>Osoby</h4>
       <table><thead><tr><th>Jméno</th><th>Pozice</th><th>Confidence</th><th>Status</th><th>Akce</th></tr></thead><tbody>
         {company.persons.map((person) => (
@@ -602,6 +634,11 @@ function BatchDetailPage() {
   const [batch, setBatch] = useState<SearchBatchDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [processingLogsVisible, setProcessingLogsVisible] = useState(50);
+  const [filterHasContact, setFilterHasContact] = useState(false);
+  const [filterErrorsOnly, setFilterErrorsOnly] = useState(false);
+  const [filterNoResultOnly, setFilterNoResultOnly] = useState(false);
+  const [filterHighMediumOnly, setFilterHighMediumOnly] = useState(false);
 
   const load = async () => {
     if (!id) {
@@ -638,6 +675,17 @@ function BatchDetailPage() {
 
   const retryFailed = async () => { if (!id) return; setLoading(true); try { await api(`/search-batches/${id}/retry-failed`, { method: 'POST' }); await load(); } catch (e) { setError(e instanceof Error ? e.message : 'Retry failed'); } finally { setLoading(false); } };
 
+  const retryCompany = async (companyId: string) => {
+    setLoading(true);
+    try {
+      await api(`/companies/${companyId}/retry`, { method: 'POST' });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Retry firmy selhalo');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const downloadExport = async (format: 'csv' | 'xlsx') => {
     if (!id) {
@@ -672,30 +720,6 @@ function BatchDetailPage() {
     }
   };
 
-  const reloadCompanyAres = async (companyId: string) => {
-    setLoading(true);
-    try {
-      await api(`/companies/${companyId}/reload-ares`, { method: 'POST' });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Reload ARES selhal');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const findCompanyWebsite = async (companyId: string) => {
-    setLoading(true);
-    try {
-      await api(`/companies/${companyId}/find-website`, { method: 'POST' });
-      await load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Vyhledání webu firmy selhalo');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const setManualWebsite = async (companyId: string, websiteUrl: string) => {
     if (!websiteUrl.trim()) {
       return;
@@ -716,6 +740,30 @@ function BatchDetailPage() {
     }
   };
 
+  const setBestAsFinal = async (company: Company) => {
+    const bestScore = getBestScore(company);
+    if (!bestScore?.contact?.id) {
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await api(`/companies/${company.id}/select-final-contact`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personId: bestScore.person?.id ?? null,
+          contactId: bestScore.contact.id
+        })
+      });
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Nastavení finálního kontaktu selhalo');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (error) {
     return <p className="error">{error}</p>;
   }
@@ -723,6 +771,22 @@ function BatchDetailPage() {
   if (!batch) {
     return <p>Načítám…</p>;
   }
+
+  const filteredCompanies = useMemo(() => batch.companies.filter((company) => {
+    const bestScore = getBestScore(company);
+    const hasContact = (company.contactsCount ?? 0) > 0 || Boolean(company.finalContactId || company.bestContactId);
+    const isError = company.status === 'error' || Boolean(company.errorMessage || company.extractionErrorMessage || company.crawlErrorMessage);
+    const noResult = (company.contactsCount ?? 0) === 0 && !company.finalContactId && !company.bestContactId;
+    const highMedium = bestScore?.category === 'high' || bestScore?.category === 'medium';
+
+    if (filterHasContact && !hasContact) return false;
+    if (filterErrorsOnly && !isError) return false;
+    if (filterNoResultOnly && !noResult) return false;
+    if (filterHighMediumOnly && !highMedium) return false;
+    return true;
+  }), [batch.companies, filterErrorsOnly, filterHasContact, filterHighMediumOnly, filterNoResultOnly]);
+
+  const processingLogsToShow = batch.processingLogs.slice(0, processingLogsVisible);
 
   return (
     <div>
@@ -742,52 +806,53 @@ function BatchDetailPage() {
       <p><strong>Aktuální krok:</strong> {batch.currentStep ?? '—'}</p>
       <p><strong>Zpracováno:</strong> {batch.processedCount} / {batch.totalCount} ({(batch as SearchBatch & { progressPercent?: number }).progressPercent ?? 0}%)</p>
 
-      <h2>Firmy</h2>
+      <h2>Firmy – souhrn</h2>
+      <div className="filters">
+        <label><input type="checkbox" checked={filterHasContact} onChange={(e) => setFilterHasContact(e.target.checked)} /> pouze firmy s kontaktem</label>
+        <label><input type="checkbox" checked={filterErrorsOnly} onChange={(e) => setFilterErrorsOnly(e.target.checked)} /> pouze chyby</label>
+        <label><input type="checkbox" checked={filterNoResultOnly} onChange={(e) => setFilterNoResultOnly(e.target.checked)} /> pouze bez výsledku</label>
+        <label><input type="checkbox" checked={filterHighMediumOnly} onChange={(e) => setFilterHighMediumOnly(e.target.checked)} /> pouze high/medium score</label>
+      </div>
       <table>
         <thead>
           <tr>
             <th>IČO</th>
-            <th>Název firmy</th>
-            <th>Adresa</th>
-            <th>Web firmy</th>
-            <th>Website confidence</th>
+            <th>Název</th>
+            <th>Web</th>
+            <th>Status</th>
             <th>Počet stažených stránek</th>
-            <th>Počet osob</th>
             <th>Počet kontaktů</th>
             <th>Nejlepší kontakt</th>
-            <th>Nejlepší osoba</th>
             <th>Score</th>
-            <th>Kategorie</th>
-            <th>targetRole</th>
-            <th>Stav extrakce</th>
-            <th>Chyba extrakce</th>
             <th>Akce</th>
           </tr>
         </thead>
         <tbody>
-          {batch.companies.map((company) => (
+          {filteredCompanies.map((company) => {
+            const bestScore = getBestScore(company);
+            const bestContact = bestScore?.contact ?? null;
+            const sourceUrl = company.contacts.find((item) => item.id === bestContact?.id)?.sourceUrl;
+            return (
             <tr key={company.id}>
               <td>{company.ico}</td>
               <td>{company.companyName ?? '—'}</td>
-              <td>{company.addressText ?? '—'}</td>
               <td>{company.websiteUrl ? <a href={company.websiteUrl} target="_blank" rel="noreferrer">{company.websiteDomain ?? company.websiteUrl}</a> : '—'}</td>
-              <td>{company.websiteConfidenceScore ?? '—'}</td>
-              <td>{company.crawledPagesCount ?? 0}</td>
-              <td>{company.personsCount ?? 0}</td>
-              <td>{company.contactsCount ?? 0}</td>
-              <td>{company.contactScores.find((item) => item.contactId === company.bestContactId)?.contact?.value ?? '—'}</td>
-              <td>{company.contactScores.find((item) => item.person?.id === company.bestPersonId)?.person?.fullName ?? '—'}</td>
-              <td>{company.bestContactScore ?? '—'}</td>
-              <td>{scoreCategoryLabel(company.contactScores.find((item) => item.contactId === company.bestContactId)?.category)}</td>
-              <td>{company.contactScores.find((item) => item.contactId === company.bestContactId)?.targetRole ?? batch.targetRole ?? '—'}</td>
               <td>{company.status}</td>
-              <td>{company.extractionErrorMessage ?? company.crawlErrorMessage ?? company.errorMessage ?? '—'}</td>
+              <td>{company.crawledPagesCount ?? 0}</td>
+              <td>{company.contactsCount ?? 0}</td>
+              <td>{bestContact?.value ?? '—'}</td>
+              <td>{company.bestContactScore ?? '—'}</td>
               <td>
-                <button className="button" onClick={() => void reloadCompanyAres(company.id)} disabled={loading}>Reload ARES</button>{' '}
-                <button className="button" onClick={() => void findCompanyWebsite(company.id)} disabled={loading}>Najít web</button>
+                <div className="row-actions">
+                  <button className="button" onClick={() => void retryCompany(company.id)} disabled={loading}>Retry firma</button>
+                  {company.websiteUrl && <a className="button" href={company.websiteUrl} target="_blank" rel="noreferrer">Otevřít web</a>}
+                  {sourceUrl && <a className="button" href={sourceUrl} target="_blank" rel="noreferrer">Zdroj kontaktu</a>}
+                  <button className="button" onClick={() => void setBestAsFinal(company)} disabled={loading || !bestContact}>Nastavit finální</button>
+                </div>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
 
@@ -800,53 +865,62 @@ function BatchDetailPage() {
         />
       ))}
 
-      <h2>Processing log</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Čas</th>
-            <th>Krok</th>
-            <th>Status</th>
-            <th>Firma</th>
-            <th>Zpráva</th>
-          </tr>
-        </thead>
-        <tbody>
-          {batch.processingLogs.map((log) => (
-            <tr key={log.id}>
-              <td>{new Date(log.createdAt).toLocaleString('cs-CZ')}</td>
-              <td>{log.step}</td>
-              <td>{log.status}</td>
-              <td>{log.companyId ?? '—'}</td>
-              <td>{log.message}</td>
+      <details>
+        <summary>Processing log ({batch.processingLogs.length})</summary>
+        <table>
+          <thead>
+            <tr>
+              <th>Čas</th>
+              <th>Krok</th>
+              <th>Status</th>
+              <th>Firma</th>
+              <th>Zpráva</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {processingLogsToShow.map((log) => (
+              <tr key={log.id}>
+                <td>{new Date(log.createdAt).toLocaleString('cs-CZ')}</td>
+                <td>{log.step}</td>
+                <td>{log.status}</td>
+                <td>{log.companyId ?? '—'}</td>
+                <td>{log.message}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {processingLogsVisible < batch.processingLogs.length && (
+          <button className="button" onClick={() => setProcessingLogsVisible((count) => count + 50)}>
+            Načíst další
+          </button>
+        )}
+      </details>
 
-      <h2>Import log</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Řádek</th>
-            <th>Raw hodnota</th>
-            <th>Normalizované IČO</th>
-            <th>Status</th>
-            <th>Zpráva</th>
-          </tr>
-        </thead>
-        <tbody>
-          {batch.importLogs.map((log) => (
-            <tr key={log.id}>
-              <td>{log.rowNumber}</td>
-              <td>{log.rawValue}</td>
-              <td>{log.normalizedIco ?? '—'}</td>
-              <td>{log.status}</td>
-              <td>{log.message ?? '—'}</td>
+      <details>
+        <summary>Import log ({batch.importLogs.length})</summary>
+        <table>
+          <thead>
+            <tr>
+              <th>Řádek</th>
+              <th>Raw hodnota</th>
+              <th>Normalizované IČO</th>
+              <th>Status</th>
+              <th>Zpráva</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {batch.importLogs.map((log) => (
+              <tr key={log.id}>
+                <td>{log.rowNumber}</td>
+                <td>{log.rawValue}</td>
+                <td>{log.normalizedIco ?? '—'}</td>
+                <td>{log.status}</td>
+                <td>{log.message ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </details>
     </div>
   );
 }

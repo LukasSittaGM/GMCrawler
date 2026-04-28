@@ -144,3 +144,37 @@ input, textarea {
   gap: 1rem;
   margin-bottom: 1.2rem;
 }
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem 1.2rem;
+  margin-bottom: 0.8rem;
+}
+
+.filters label {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.95rem;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+details {
+  margin-bottom: 1rem;
+  background: #fff;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #dfe4ea;
+  border-radius: 0.35rem;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin: 0.25rem 0 0.6rem;
+}
