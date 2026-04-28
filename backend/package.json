@@ -7,6 +7,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
+    "start:docker": "prisma migrate deploy && node dist/server.js",
+    "dev:docker": "prisma migrate deploy && npm run dev",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev"
   },

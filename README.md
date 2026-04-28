@@ -50,6 +50,12 @@ npx prisma generate
 npx prisma migrate dev
 ```
 
+Pokud v lokálním vývoji chybí migration historie (např. po resetu databáze), použij fallback:
+```bash
+cd backend
+npx prisma db push
+```
+
 ## Spuštění backendu
 ```bash
 cd backend
@@ -69,6 +75,12 @@ Samostatná `worker` služba je připravena v `docker-compose.yml` pro budoucí 
 ## Spuštění přes Docker Compose
 ```bash
 docker compose up --build
+```
+
+`app` služba před startem backendu automaticky spouští:
+```bash
+cd backend
+npx prisma migrate deploy
 ```
 
 Po spuštění otevři:
