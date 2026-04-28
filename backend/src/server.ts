@@ -6,7 +6,7 @@ import { ContactType, Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { buildImportSummary, parseFile } from './import.js';
 import { AresError, AresService, waitAresDelay } from './ares.js';
-import { findWebsiteForCompany, normalizeWebsiteUrl } from './website-search.js';
+import { findWebsiteForCompany, normalizeWebsiteUrl, runWebSearchForBatch, runWebSearchForCompany } from './website-search.js';
 import { crawlCompanyWebsite } from './crawler.js';
 import { extractCompanyContacts, extractContactsForBatch, updateContactReviewStatus, updatePersonReviewStatus } from './extractor.js';
 import { scoreCompanyContacts, scoreContactsForBatch } from './contact-scoring.js';
@@ -451,6 +451,39 @@ app.post('/api/search-batches/:id/find-websites', async (req, res) => {
     noResultCount,
     errorCount
   });
+});
+
+app.post('/api/companies/:id/web-search', async (req, res) => {
+  const company = await prisma.company.findUnique({ where: { id: req.params.id } });
+  if (!company) {
+    return res.status(404).json({ error: 'Firma nebyla nalezena' });
+  }
+
+  const result = await runWebSearchForCompany(company.id);
+  return res.json({ companyId: company.id, ...result });
+});
+
+app.post('/api/search-batches/:id/web-search', async (req, res) => {
+  const batch = await prisma.searchBatch.findUnique({ where: { id: req.params.id } });
+  if (!batch) {
+    return res.status(404).json({ error: 'Dávka nebyla nalezena' });
+  }
+
+  const result = await runWebSearchForBatch(batch.id);
+  return res.json({ batchId: batch.id, ...result });
+});
+
+app.get('/api/companies/:id/search-results', async (req, res) => {
+  const company = await prisma.company.findUnique({ where: { id: req.params.id } });
+  if (!company) {
+    return res.status(404).json({ error: 'Firma nebyla nalezena' });
+  }
+
+  const searchResults = await prisma.searchResult.findMany({
+    where: { companyId: company.id },
+    orderBy: [{ confidenceScore: 'desc' }, { rank: 'asc' }, { createdAt: 'desc' }]
+  });
+  return res.json(searchResults);
 });
 
 app.post('/api/companies/:id/crawl', async (req, res) => {
@@ -1128,6 +1161,7 @@ app.get('/api/search-batches/:id', async (req, res) => {
         orderBy: { createdAt: 'asc' },
         include: {
           websites: { orderBy: [{ isSelected: 'desc' }, { confidenceScore: 'desc' }] },
+          searchResults: { orderBy: [{ confidenceScore: 'desc' }, { rank: 'asc' }] },
           crawledPages: { orderBy: { createdAt: 'desc' } },
           persons: { orderBy: [{ confidenceScore: 'desc' }, { createdAt: 'desc' }] },
           contacts: { orderBy: [{ confidenceScore: 'desc' }, { createdAt: 'desc' }], include: { person: true } },
