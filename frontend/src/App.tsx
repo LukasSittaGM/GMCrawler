@@ -146,20 +146,28 @@ type SearchBatchDetail = SearchBatch & {
   processingLogs: ProcessingLog[];
 };
 
+class ApiError extends Error {
+  readonly isNetworkError: boolean;
+
+  constructor(message: string, isNetworkError = false) {
+    super(message);
+    this.isNetworkError = isNetworkError;
+  }
+}
+
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-    const targetUrl = `${API_BASE_URL}${url}`;
+  const targetUrl = `${API_BASE_URL}${url}`;
   let response: Response;
 
   try {
     response = await fetch(targetUrl, { credentials: 'include', ...init });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown network error';
-    throw new Error(`Network request failed: ${targetUrl} (${message})`);
+    throw new ApiError(error instanceof Error ? error.message : 'Failed to fetch', true);
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const detail = body.error?.message ?? body.error ?? `HTTP ${response.status}`;
-    throw new Error(`Request failed: ${targetUrl} (${response.status} ${response.statusText}) - ${detail}`);
+    throw new ApiError(String(detail));
   }
 
   if (response.status === 204) {
@@ -177,9 +185,19 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await api('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      await api('/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password })
+      });
+      await api('/auth/me');
       onLogin();
     } catch (err) {
+      if (err instanceof ApiError && err.isNetworkError) {
+        setError('Failed to fetch');
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Login failed');
     }
   };
@@ -838,7 +856,10 @@ export function App() {
   const [checked, setChecked] = useState(false);
 
   useEffect(() => {
-    api('/search-batches').then(() => setAuthenticated(true)).catch(() => setAuthenticated(false)).finally(() => setChecked(true));
+    api('/auth/me')
+      .then(() => setAuthenticated(true))
+      .catch(() => setAuthenticated(false))
+      .finally(() => setChecked(true));
   }, []);
 
   if (!checked) return <main className="container"><p>Načítám…</p></main>;

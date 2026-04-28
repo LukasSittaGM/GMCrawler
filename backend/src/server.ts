@@ -28,12 +28,13 @@ const allowedOrigins = [
 
 app.use(cors({
   origin: allowedOrigins,
-  credentials: false,
+  credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 app.options('*', cors({
   origin: allowedOrigins,
+  credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -261,6 +262,10 @@ app.post('/api/login', loginHandler);
 
 app.post('/api/logout', (_req, res) => {
   clearSession(res);
+  return res.json({ ok: true });
+});
+
+app.get('/api/auth/me', (req, res) => {
   return res.json({ ok: true });
 });
 
