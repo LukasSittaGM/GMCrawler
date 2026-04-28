@@ -20,9 +20,20 @@ const upload = multer({ storage: multer.memoryStorage() });
 const port = Number(process.env.PORT ?? 3001);
 const aresService = new AresService();
 
+const allowedOrigins = [
+  config.appBaseUrl,
+  'http://localhost:5173',
+  'http://127.0.0.1:5173'
+];
+
 app.use(cors({
-  origin: config.appBaseUrl,
-  credentials: true,
+  origin: allowedOrigins,
+  credentials: false,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.options('*', cors({
+  origin: allowedOrigins,
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
@@ -208,22 +219,41 @@ async function processCompanyAres(companyId: string): Promise<{ success: boolean
 }
 
 const loginHandler = async (req: express.Request, res: express.Response) => {
-  const parsed = loginSchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid login payload', detail: parsed.error.flatten() } });
-  }
+  try {
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      console.warn('Login failed: invalid payload', {
+        path: req.path,
+        ip: req.ip,
+        issues: parsed.error.issues
+      });
+      return res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'Invalid login payload', detail: parsed.error.flatten() } });
+    }
 
-  const authResult = await verifyAdmin(parsed.data.email, parsed.data.password);
-  if (!authResult.ok && authResult.reason === 'missing_config') {
-    console.error('Admin password is not configured');
-    return res.status(500).json({ error: { code: 'CONFIG_ERROR', message: 'Server authentication is not configured', detail: {} } });
-  }
-  if (!authResult.ok) {
-    return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid credentials', detail: {} } });
-  }
+    const authResult = await verifyAdmin(parsed.data.email, parsed.data.password);
+    if (!authResult.ok && authResult.reason === 'missing_config') {
+      console.error('Login failed: admin password is not configured', { path: req.path, ip: req.ip });
+      return res.status(500).json({ error: { code: 'CONFIG_ERROR', message: 'Server authentication is not configured', detail: {} } });
+    }
+    if (!authResult.ok) {
+      console.warn('Login failed: invalid credentials', {
+        path: req.path,
+        ip: req.ip,
+        email: parsed.data.email
+      });
+      return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid credentials', detail: {} } });
+    }
 
-  issueSession(res, parsed.data.email);
-  return res.json({ ok: true, email: parsed.data.email });
+    issueSession(res, parsed.data.email);
+    return res.json({ ok: true, email: parsed.data.email });
+  } catch (error) {
+    console.error('Login failed: unexpected error', {
+      path: req.path,
+      ip: req.ip,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return res.status(500).json({ error: { code: 'LOGIN_ERROR', message: 'Unexpected login error', detail: {} } });
+  }
 };
 
 app.post('/api/auth/login', loginHandler);
