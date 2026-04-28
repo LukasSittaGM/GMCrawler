@@ -1,7 +1,7 @@
 import { Link, Route, Routes, useParams } from 'react-router-dom';
 import { FormEvent, useEffect, useState } from 'react';
 
-const API = 'http://localhost:3001/api';
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
 
 type SearchBatch = {
   id: string;
@@ -147,10 +147,19 @@ type SearchBatchDetail = SearchBatch & {
 };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API}${url}`, { credentials: 'include', ...init });
+    const targetUrl = `${API_BASE_URL}${url}`;
+  let response: Response;
+
+  try {
+    response = await fetch(targetUrl, { credentials: 'include', ...init });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown network error';
+    throw new Error(`Network request failed: ${targetUrl} (${message})`);
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error?.message ?? body.error ?? 'Požadavek selhal');
+    const detail = body.error?.message ?? body.error ?? `HTTP ${response.status}`;
+    throw new Error(`Request failed: ${targetUrl} (${response.status} ${response.statusText}) - ${detail}`);
   }
 
   if (response.status === 204) {
@@ -168,7 +177,7 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
-      await api('/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
+      await api('/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password }) });
       onLogin();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Login failed');
@@ -619,7 +628,8 @@ function BatchDetailPage() {
 
     setLoading(true);
     try {
-      const response = await fetch(`${API}/search-batches/${id}/export.${format}`, { credentials: 'include' });
+      const targetUrl = `${API_BASE_URL}/search-batches/${id}/export.${format}`;
+      const response = await fetch(targetUrl, { credentials: 'include' });
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         throw new Error(body.error ?? 'Export selhal');

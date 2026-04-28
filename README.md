@@ -21,6 +21,7 @@ Vyplň minimálně:
 Lokální vývoj (doporučeno):
 ```env
 NODE_ENV=development
+VITE_API_BASE_URL=http://localhost:3001/api
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=admin
 ADMIN_PASSWORD_HASH=
@@ -30,6 +31,9 @@ SESSION_SECRET=local-dev-secret
 Přihlášení pak funguje přes:
 - email: `admin@example.com`
 - heslo: `admin`
+
+Frontend API endpoint pro lokální vývoj:
+- `VITE_API_BASE_URL=http://localhost:3001/api`
 
 Produkce / bezpečnější režim: nastav `ADMIN_PASSWORD_HASH` na bcrypt hash.
 
@@ -78,7 +82,7 @@ Po spuštění otevři:
 - Spusť `docker compose up -d --build`
 
 ## Základní workflow
-1. Přihlas se admin účtem (`/api/login`, UI login stránka).
+1. Přihlas se admin účtem (`/api/auth/login`, UI login stránka).
 2. Založ dávku a importuj IČO.
 3. V detailu dávky klikni **Spustit zpracování** (`run-full-pipeline`).
 4. Sleduj progress (`currentStep`, `progressPercent`) a logy.
@@ -94,7 +98,7 @@ Po spuštění otevři:
 - `GET /api/search-batches/:id/logs`
 - `GET /api/companies/:id/logs`
 - `GET /api/health`
-- `POST /api/login`, `POST /api/logout`
+- `POST /api/auth/login`, `POST /api/logout` (kompatibilně zůstává i `POST /api/login`)
 
 ## Testovací data
 Složka `test-data/` obsahuje:
