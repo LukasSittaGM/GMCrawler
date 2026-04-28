@@ -1,4 +1,4 @@
-import { Link, Route, Routes, useParams } from 'react-router-dom';
+import { Link, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { FormEvent, Fragment, useEffect, useMemo, useState } from 'react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001/api';
@@ -7,6 +7,7 @@ type SearchBatch = {
   id: string;
   name: string;
   targetRole: string | null;
+  normalizedTargetRole?: string | null;
   note: string | null;
   status: string;
   totalCount: number;
@@ -68,11 +69,11 @@ type Company = {
   scoredAt: string | null;
   status: string;
   errorMessage: string | null;
-  websites: CompanyWebsite[];
-  crawledPages: CrawledPage[];
-  persons: CompanyPerson[];
-  contacts: CompanyContact[];
-  contactScores: ContactScore[];
+  websites?: CompanyWebsite[];
+  crawledPages?: CrawledPage[];
+  persons?: CompanyPerson[];
+  contacts?: CompanyContact[];
+  contactScores?: ContactScore[];
 };
 type CompanyPerson = {
   id: string;
@@ -141,33 +142,56 @@ type ProcessingLog = {
 };
 
 type SearchBatchDetail = SearchBatch & {
-  companies: Company[];
-  importLogs: ImportLog[];
-  processingLogs: ProcessingLog[];
+  companies?: Company[];
+  importLogs?: ImportLog[];
+  processingLogs?: ProcessingLog[];
 };
 
 class ApiError extends Error {
   readonly isNetworkError: boolean;
+  readonly url: string;
+  readonly status: number | null;
+  readonly backendMessage: string | null;
 
-  constructor(message: string, isNetworkError = false) {
+  constructor(message: string, options: { isNetworkError?: boolean; url: string; status?: number | null; backendMessage?: string | null }) {
     super(message);
-    this.isNetworkError = isNetworkError;
+    this.isNetworkError = Boolean(options.isNetworkError);
+    this.url = options.url;
+    this.status = options.status ?? null;
+    this.backendMessage = options.backendMessage ?? null;
   }
+}
+
+function toErrorMessage(error: unknown, fallbackText: string): string {
+  if (error instanceof ApiError) {
+    const statusText = error.status ? `${error.status}` : 'Network error';
+    const backendMessage = error.backendMessage ?? error.message;
+    return `${fallbackText}\n\n${error.url}\n${statusText} ${backendMessage}`;
+  }
+  return error instanceof Error ? `${fallbackText}\n\n${error.message}` : fallbackText;
 }
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const targetUrl = `${API_BASE_URL}${url}`;
   let response: Response;
+  const requestInit = { credentials: 'include' as const, ...init };
+
+  if (import.meta.env.DEV) {
+    console.debug('[api] request', { url: targetUrl, method: requestInit.method ?? 'GET' });
+  }
 
   try {
-    response = await fetch(targetUrl, { credentials: 'include', ...init });
+    response = await fetch(targetUrl, requestInit);
   } catch (error) {
-    throw new ApiError(error instanceof Error ? error.message : 'Failed to fetch', true);
+    throw new ApiError(error instanceof Error ? error.message : 'Failed to fetch', { isNetworkError: true, url: targetUrl });
+  }
+  if (import.meta.env.DEV) {
+    console.debug('[api] response', { url: targetUrl, status: response.status });
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    const detail = body.error?.message ?? body.error ?? `HTTP ${response.status}`;
-    throw new ApiError(String(detail));
+    const detail = body.error?.message ?? body.error ?? response.statusText ?? `HTTP ${response.status}`;
+    throw new ApiError(String(detail), { url: targetUrl, status: response.status, backendMessage: String(detail) });
   }
 
   if (response.status === 204) {
@@ -194,11 +218,7 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
       await api('/auth/me');
       onLogin();
     } catch (err) {
-      if (err instanceof ApiError && err.isNetworkError) {
-        setError('Failed to fetch');
-        return;
-      }
-      setError(err instanceof Error ? err.message : 'Login failed');
+      setError(toErrorMessage(err, 'Přihlášení selhalo.'));
     }
   };
 
@@ -206,7 +226,8 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
 }
 
 function getBestScore(company: Company): ContactScore | undefined {
-  return company.contactScores.find((item) => item.contactId === company.bestContactId) ?? company.contactScores[0];
+  const scores = company.contactScores ?? [];
+  return scores.find((item) => item.contactId === company.bestContactId) ?? scores[0];
 }
 
 function BatchListPage() {
@@ -219,7 +240,7 @@ function BatchListPage() {
       setBatches(await api<SearchBatch[]>('/search-batches'));
       setDashboard(await api('/dashboard'));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Nepodařilo se načíst dávky');
+      setError(toErrorMessage(e, 'Nepodařilo se načíst dávky.'));
     }
   };
 
@@ -262,11 +283,14 @@ function BatchListPage() {
 }
 
 function NewBatchPage() {
+  const navigate = useNavigate();
   const [name, setName] = useState('');
   const [targetRole, setTargetRole] = useState('');
   const [note, setNote] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const roleChips = ['CEO', 'CFO', 'HR', 'Obchod', 'Marketing', 'IT', 'Fleet', 'Management'];
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -288,23 +312,36 @@ function NewBatchPage() {
     }
 
     try {
+      setLoading(true);
       const batch = await api<SearchBatch>('/search-batches', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, targetRole: targetRole || null, note: note || null })
       });
+      if (import.meta.env.DEV) {
+        console.debug('[batch-create] created', { batchId: batch.id, targetRole: targetRole || null });
+      }
+      if (!batch.id) {
+        throw new Error('Backend nevrátil ID dávky');
+      }
 
       const form = new FormData();
       form.append('file', file);
 
-      await api(`/search-batches/${batch.id}/import`, {
+      const importResult = await api(`/search-batches/${batch.id}/import`, {
         method: 'POST',
         body: form
       });
+      if (import.meta.env.DEV) {
+        console.debug('[batch-import] result', importResult);
+        console.debug('[batch-import] redirect', `/batches/${batch.id}`);
+      }
 
-      window.location.href = `/batches/${batch.id}`;
+      navigate(`/batches/${batch.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Operace selhala');
+      setError(toErrorMessage(err, 'Nepodařilo se vytvořit nebo importovat dávku.'));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -316,7 +353,17 @@ function NewBatchPage() {
           <input value={name} onChange={(e) => setName(e.target.value)} required />
         </label>
         <label>Hledaná role
-          <input value={targetRole} onChange={(e) => setTargetRole(e.target.value)} />
+          <input
+            value={targetRole}
+            onChange={(e) => setTargetRole(e.target.value)}
+            placeholder="Např. CEO, CFO, HR, obchod, IT, marketing, fleet"
+          />
+          <small className="hint">Doporučeně zadávejte buď oblast (finance, HR, obchod, IT), nebo konkrétní roli (CEO, CFO, HR manager). Aplikace si vstup převede na interní kategorii pro scoring.</small>
+          <div className="chips">
+            {roleChips.map((chip) => (
+              <button key={chip} className="chip" type="button" onClick={() => setTargetRole(chip)}>{chip}</button>
+            ))}
+          </div>
         </label>
         <label>Poznámka
           <textarea value={note} onChange={(e) => setNote(e.target.value)} />
@@ -325,7 +372,7 @@ function NewBatchPage() {
           <input type="file" accept=".csv,.xlsx" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
         </label>
         {error && <p className="error">{error}</p>}
-        <button type="submit" className="button">Vytvořit/importovat</button>
+        <button type="submit" className="button" disabled={loading}>{loading ? 'Nahrávám…' : 'Vytvořit/importovat'}</button>
       </form>
       <Link to="/">Zpět na seznam</Link>
     </div>
@@ -349,6 +396,10 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
   const [editContactType, setEditContactType] = useState<'email' | 'phone' | 'general_email' | 'general_phone' | 'other'>('email');
   const [localError, setLocalError] = useState<string | null>(null);
   const [expandedPageId, setExpandedPageId] = useState<string | null>(null);
+  const companyContacts = company.contacts ?? [];
+  const companyPersons = company.persons ?? [];
+  const companyCrawledPages = company.crawledPages ?? [];
+  const companyContactScores = company.contactScores ?? [];
 
   const reviewContact = async (contactId: string, reviewStatus: 'confirmed' | 'rejected' | 'manually_edited') => {
     setLocalError(null);
@@ -474,13 +525,13 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
     }
   };
 
-  const bestContact = company.contactScores.find((item) => item.contactId === company.bestContactId) ?? company.contactScores[0];
-  const bestPerson = company.contactScores.find((item) => item.person?.id === company.bestPersonId)?.person
+  const bestContact = companyContactScores.find((item) => item.contactId === company.bestContactId) ?? companyContactScores[0];
+  const bestPerson = companyContactScores.find((item) => item.person?.id === company.bestPersonId)?.person
     ?? bestContact?.person
     ?? null;
-  const finalContact = company.contacts.find((item) => item.id === company.finalContactId) ?? null;
-  const finalPerson = company.persons.find((item) => item.id === company.finalPersonId)
-    ?? (finalContact?.person ? company.persons.find((item) => item.id === finalContact.person?.id) ?? null : null);
+  const finalContact = companyContacts.find((item) => item.id === company.finalContactId) ?? null;
+  const finalPerson = companyPersons.find((item) => item.id === company.finalPersonId)
+    ?? (finalContact?.person ? companyPersons.find((item) => item.id === finalContact.person?.id) ?? null : null);
 
   return (
     <details>
@@ -518,7 +569,7 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
           </tr>
         </thead>
         <tbody>
-          {company.crawledPages.map((page) => (
+          {companyCrawledPages.map((page) => (
             <Fragment key={page.id}>
               <tr>
                 <td><a href={page.url} target="_blank" rel="noreferrer">{page.url}</a></td>
@@ -540,7 +591,7 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
               )}
             </Fragment>
           ))}
-          {company.crawledPages.length === 0 && (
+          {companyCrawledPages.length === 0 && (
             <tr>
               <td colSpan={5}>Žádné stažené stránky.</td>
             </tr>
@@ -550,7 +601,7 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
 
       <h4>Osoby</h4>
       <table><thead><tr><th>Jméno</th><th>Pozice</th><th>Confidence</th><th>Status</th><th>Akce</th></tr></thead><tbody>
-        {company.persons.map((person) => (
+        {companyPersons.map((person) => (
           <tr key={person.id} className={person.isSelected ? 'selected-row' : undefined}>
             <td>{person.fullName} {person.manuallyEdited ? <span className="badge-manual">manual</span> : <span className="badge-auto">auto</span>}</td>
             <td>{person.position ?? '—'}</td>
@@ -575,7 +626,7 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
 
       <h4>Kontakty</h4>
       <table><thead><tr><th>Typ</th><th>Hodnota</th><th>Osoba</th><th>Confidence</th><th>Status</th><th>Akce</th></tr></thead><tbody>
-        {company.contacts.map((contact) => (
+        {companyContacts.map((contact) => (
           <tr key={contact.id} className={contact.isSelected ? 'selected-row' : undefined}>
             <td>{contact.contactType}</td>
             <td>{contact.value} {contact.manuallyEdited ? <span className="badge-manual">manual</span> : <span className="badge-auto">auto</span>}</td>
@@ -620,7 +671,7 @@ function CompanyDetail({ company, onSelect, onChanged }: { company: Company; onS
           <input value={newContactValue} onChange={(e) => setNewContactValue(e.target.value)} placeholder="Hodnota kontaktu" />
           <select value={newContactPersonId} onChange={(e) => setNewContactPersonId(e.target.value)}>
             <option value="">Bez osoby</option>
-            {company.persons.map((person) => <option key={person.id} value={person.id}>{person.fullName}</option>)}
+            {companyPersons.map((person) => <option key={person.id} value={person.id}>{person.fullName}</option>)}
           </select>
           <button className="button" onClick={() => void addManualContact()}>Vytvořit kontakt</button>
         </div>
@@ -639,6 +690,9 @@ function BatchDetailPage() {
   const [filterErrorsOnly, setFilterErrorsOnly] = useState(false);
   const [filterNoResultOnly, setFilterNoResultOnly] = useState(false);
   const [filterHighMediumOnly, setFilterHighMediumOnly] = useState(false);
+  const companies = batch?.companies ?? [];
+  const processingLogs = batch?.processingLogs ?? [];
+  const importLogs = batch?.importLogs ?? [];
 
   const load = async () => {
     if (!id) {
@@ -649,7 +703,7 @@ function BatchDetailPage() {
       setError(null);
       setBatch(await api<SearchBatchDetail>(`/search-batches/${id}`));
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Nepodařilo se načíst detail dávky');
+      setError(toErrorMessage(e, 'Nepodařilo se načíst detail dávky.'));
     }
   };
 
@@ -667,13 +721,13 @@ function BatchDetailPage() {
       await api(`/search-batches/${id}/run-full-pipeline`, { method: 'POST' });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Spuštění dávky selhalo');
+      setError(toErrorMessage(e, 'Spuštění dávky selhalo.'));
     } finally {
       setLoading(false);
     }
   };
 
-  const retryFailed = async () => { if (!id) return; setLoading(true); try { await api(`/search-batches/${id}/retry-failed`, { method: 'POST' }); await load(); } catch (e) { setError(e instanceof Error ? e.message : 'Retry failed'); } finally { setLoading(false); } };
+  const retryFailed = async () => { if (!id) return; setLoading(true); try { await api(`/search-batches/${id}/retry-failed`, { method: 'POST' }); await load(); } catch (e) { setError(toErrorMessage(e, 'Retry failed.')); } finally { setLoading(false); } };
 
   const retryCompany = async (companyId: string) => {
     setLoading(true);
@@ -681,7 +735,7 @@ function BatchDetailPage() {
       await api(`/companies/${companyId}/retry`, { method: 'POST' });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Retry firmy selhalo');
+      setError(toErrorMessage(e, 'Retry firmy selhalo.'));
     } finally {
       setLoading(false);
     }
@@ -714,7 +768,7 @@ function BatchDetailPage() {
       link.remove();
       window.URL.revokeObjectURL(url);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Stažení exportu selhalo');
+      setError(toErrorMessage(e, 'Stažení exportu selhalo.'));
     } finally {
       setLoading(false);
     }
@@ -734,7 +788,7 @@ function BatchDetailPage() {
       });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ruční nastavení webu selhalo');
+      setError(toErrorMessage(e, 'Ruční nastavení webu selhalo.'));
     } finally {
       setLoading(false);
     }
@@ -758,21 +812,13 @@ function BatchDetailPage() {
       });
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Nastavení finálního kontaktu selhalo');
+      setError(toErrorMessage(e, 'Nastavení finálního kontaktu selhalo.'));
     } finally {
       setLoading(false);
     }
   };
 
-  if (error) {
-    return <p className="error">{error}</p>;
-  }
-
-  if (!batch) {
-    return <p>Načítám…</p>;
-  }
-
-  const filteredCompanies = useMemo(() => batch.companies.filter((company) => {
+  const filteredCompanies = useMemo(() => companies.filter((company) => {
     const bestScore = getBestScore(company);
     const hasContact = (company.contactsCount ?? 0) > 0 || Boolean(company.finalContactId || company.bestContactId);
     const isError = company.status === 'error' || Boolean(company.errorMessage || company.extractionErrorMessage || company.crawlErrorMessage);
@@ -784,9 +830,17 @@ function BatchDetailPage() {
     if (filterNoResultOnly && !noResult) return false;
     if (filterHighMediumOnly && !highMedium) return false;
     return true;
-  }), [batch.companies, filterErrorsOnly, filterHasContact, filterHighMediumOnly, filterNoResultOnly]);
+  }), [companies, filterErrorsOnly, filterHasContact, filterHighMediumOnly, filterNoResultOnly]);
 
-  const processingLogsToShow = batch.processingLogs.slice(0, processingLogsVisible);
+  const processingLogsToShow = processingLogs.slice(0, processingLogsVisible);
+
+  if (error) {
+    return <p className="error">{error}</p>;
+  }
+
+  if (!batch) {
+    return <p>Načítám…</p>;
+  }
 
   return (
     <div>
@@ -801,7 +855,8 @@ function BatchDetailPage() {
           <button className="button" onClick={() => void load()} disabled={loading}>Refresh</button>
         </div>
       </div>
-      <p><strong>Role:</strong> {batch.targetRole ?? '—'}</p>
+      <p><strong>Hledaná role:</strong> {batch.targetRole ?? '—'}</p>
+      <p><strong>Interní scoring kategorie:</strong> {batch.normalizedTargetRole ?? '—'}</p>
       <p><strong>Stav dávky:</strong> {batch.status}</p>
       <p><strong>Aktuální krok:</strong> {batch.currentStep ?? '—'}</p>
       <p><strong>Zpracováno:</strong> {batch.processedCount} / {batch.totalCount} ({(batch as SearchBatch & { progressPercent?: number }).progressPercent ?? 0}%)</p>
@@ -831,7 +886,7 @@ function BatchDetailPage() {
           {filteredCompanies.map((company) => {
             const bestScore = getBestScore(company);
             const bestContact = bestScore?.contact ?? null;
-            const sourceUrl = company.contacts.find((item) => item.id === bestContact?.id)?.sourceUrl;
+            const sourceUrl = (company.contacts ?? []).find((item) => item.id === bestContact?.id)?.sourceUrl;
             return (
             <tr key={company.id}>
               <td>{company.ico}</td>
@@ -856,7 +911,7 @@ function BatchDetailPage() {
         </tbody>
       </table>
 
-      {batch.companies.map((company) => (
+      {companies.map((company) => (
         <CompanyDetail
           key={`${company.id}-detail`}
           company={company}
@@ -866,7 +921,7 @@ function BatchDetailPage() {
       ))}
 
       <details>
-        <summary>Processing log ({batch.processingLogs.length})</summary>
+        <summary>Processing log ({processingLogs.length})</summary>
         <table>
           <thead>
             <tr>
@@ -889,7 +944,7 @@ function BatchDetailPage() {
             ))}
           </tbody>
         </table>
-        {processingLogsVisible < batch.processingLogs.length && (
+        {processingLogsVisible < processingLogs.length && (
           <button className="button" onClick={() => setProcessingLogsVisible((count) => count + 50)}>
             Načíst další
           </button>
@@ -897,7 +952,7 @@ function BatchDetailPage() {
       </details>
 
       <details>
-        <summary>Import log ({batch.importLogs.length})</summary>
+        <summary>Import log ({importLogs.length})</summary>
         <table>
           <thead>
             <tr>
@@ -909,7 +964,7 @@ function BatchDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {batch.importLogs.map((log) => (
+            {importLogs.map((log) => (
               <tr key={log.id}>
                 <td>{log.rowNumber}</td>
                 <td>{log.rawValue}</td>

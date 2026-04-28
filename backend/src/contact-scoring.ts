@@ -1,5 +1,6 @@
 import { ContactScoreCategory, Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
+import { type NormalizedTargetRole, normalizeTargetRole } from './role-normalization.js';
 
 type ReasonItem = {
   type: string;
@@ -7,7 +8,7 @@ type ReasonItem = {
   message: string;
 };
 
-type RoleKey = 'finance' | 'HR' | 'obchod' | 'marketing' | 'IT' | 'management' | 'fleet';
+type RoleKey = Exclude<NormalizedTargetRole, 'custom'>;
 
 type ScoreCandidate = {
   companyId: string;
@@ -27,16 +28,16 @@ const ROLE_KEYWORDS: Record<RoleKey, string[]> = {
   finance: [
     'cfo', 'finanční ředitel', 'finanční ředitelka', 'finance manager', 'finanční manažer', 'ekonom', 'ekonomka', 'účetní', 'hlavní účetní', 'fakturace'
   ],
-  HR: [
+  hr: [
     'hr', 'personalista', 'personalistka', 'hr manažer', 'hr manager', 'lidské zdroje', 'nábor', 'recruiter', 'people manager'
   ],
-  obchod: [
+  sales: [
     'obchod', 'obchodní ředitel', 'obchodní ředitelka', 'obchodní manažer', 'sales', 'sales manager', 'key account', 'account manager'
   ],
   marketing: [
     'marketing', 'marketingový manažer', 'marketing manager', 'komunikace', 'pr', 'brand manager', 'social media'
   ],
-  IT: [
+  it: [
     'it', 'cio', 'cto', 'it manažer', 'správce it', 'admin', 'systémový administrátor', 'digitalizace'
   ],
   management: [
@@ -49,34 +50,6 @@ const ROLE_KEYWORDS: Record<RoleKey, string[]> = {
 
 function normalizeText(value: string | null | undefined): string {
   return (value ?? '').toLowerCase();
-}
-
-function normalizeRole(role: string | null | undefined): RoleKey | null {
-  if (!role) {
-    return null;
-  }
-
-  const lowered = role.trim().toLowerCase();
-  const aliasMap: Record<string, RoleKey> = {
-    finance: 'finance',
-    finanční: 'finance',
-    hr: 'HR',
-    lidské_zdroje: 'HR',
-    obchod: 'obchod',
-    sales: 'obchod',
-    marketing: 'marketing',
-    it: 'IT',
-    management: 'management',
-    vedení: 'management',
-    fleet: 'fleet',
-    vozový_park: 'fleet'
-  };
-
-  if (aliasMap[lowered]) {
-    return aliasMap[lowered];
-  }
-
-  return (Object.keys(ROLE_KEYWORDS) as RoleKey[]).find((key) => lowered.includes(key.toLowerCase())) ?? null;
 }
 
 function getDomain(url: string | null | undefined): string | null {
@@ -177,7 +150,7 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
   const company = await prisma.company.findUnique({
     where: { id: companyId },
     include: {
-      batch: { select: { targetRole: true } },
+      batch: { select: { targetRole: true, normalizedTargetRole: true } },
       persons: true,
       contacts: true
     }
@@ -200,7 +173,7 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
   });
 
   const targetRoleRaw = company.batch.targetRole;
-  const normalizedRole = normalizeRole(targetRoleRaw);
+  const normalizedRole = (company.batch.normalizedTargetRole as NormalizedTargetRole | null) ?? normalizeTargetRole(targetRoleRaw);
 
   const existingScoresCount = await prisma.contactScore.count({ where: { companyId: company.id } });
   if (existingScoresCount > 0) {
@@ -233,7 +206,7 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
       message: 'Contact scoring failed',
       detailJson: {
         targetRole: targetRoleRaw,
-        reason: 'Batch has no targetRole or targetRole is unsupported'
+        reason: 'Batch has no targetRole'
       }
     });
 
@@ -282,7 +255,9 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
     };
   }
 
-  const roleKeywords = ROLE_KEYWORDS[normalizedRole];
+  const roleKeywords = normalizedRole === 'custom'
+    ? [normalizeText(targetRoleRaw)]
+    : ROLE_KEYWORDS[normalizedRole];
   const companyDomain = normalizeText(company.websiteDomain);
   if (!companyDomain) {
     await createScoringLog({
@@ -427,7 +402,7 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
 
     const finalScore = clampScore(score);
     const hasRoleSignal = Boolean(positionMatch || departmentMatch);
-    const needsReview = !hasRoleSignal && normalizedRole !== 'management';
+    const needsReview = !hasRoleSignal && normalizedRole !== 'management' && normalizedRole !== 'custom';
     const category = resolveCategory(finalScore, needsReview);
 
     const candidate: ScoreCandidate = {
@@ -598,7 +573,7 @@ export async function scoreCompanyContacts(companyId: string): Promise<{ scored:
 }
 
 export async function scoreContactsForBatch(batchId: string): Promise<{ processed: number; scoredCompanies: number; errorCount: number }> {
-  const batch = await prisma.searchBatch.findUnique({ where: { id: batchId }, select: { id: true, targetRole: true } });
+  const batch = await prisma.searchBatch.findUnique({ where: { id: batchId }, select: { id: true, targetRole: true, normalizedTargetRole: true } });
   if (!batch) {
     throw new Error('Dávka nebyla nalezena');
   }

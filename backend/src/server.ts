@@ -14,6 +14,7 @@ import { buildExportRows, buildSummaryRows, generateCsv, generateXlsx } from './
 import { config } from './config.js';
 import { clearSession, issueSession, requireAuth, verifyAdmin } from './auth.js';
 import { enqueueJob, queueHealth } from './queue.js';
+import { normalizeTargetRole } from './role-normalization.js';
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -293,7 +294,12 @@ app.post('/api/search-batches', async (req, res) => {
     return res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Nevalidní vstup' });
   }
 
-  const batch = await prisma.searchBatch.create({ data: parsed.data });
+  const batch = await prisma.searchBatch.create({
+    data: {
+      ...parsed.data,
+      normalizedTargetRole: normalizeTargetRole(parsed.data.targetRole)
+    }
+  });
   return res.status(201).json(batch);
 });
 
